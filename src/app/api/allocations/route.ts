@@ -14,7 +14,15 @@ type UserRow = {
   is_active: boolean | null;
   account_status?: string | null;
 };
-type LeadRow = { id: string; company_id: string; branch_id: string | null; status: string };
+type LeadRow = {
+  id: string;
+  company_id: string;
+  branch_id: string | null;
+  status: string;
+  next_action_at?: string | null;
+  last_visit_date?: string | null;
+  integration_refs?: Record<string, unknown> | null;
+};
 type AdminClient = ReturnType<typeof createClient<any, "public", any>>;
 
 const activeStatuses = [
@@ -116,6 +124,40 @@ function leadAssignableToUser(lead: LeadRow, user: UserRow, userRoles: RoleRow[]
   return activeStatuses.includes(lead.status);
 }
 
+function addMonths(date: Date, months: number) {
+  const next = new Date(date);
+  next.setMonth(next.getMonth() + months);
+  return next;
+}
+
+function recallDueDate(value: string | null | undefined) {
+  if (!value) return null;
+  const parsed = new Date(`${value.slice(0, 10)}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return addMonths(parsed, 6);
+}
+
+function isDueForAllocation(lead: LeadRow) {
+  const status = lead.status.toLowerCase();
+  if (status !== "new") return false;
+
+  const today = new Date();
+  const todayDay = today.toISOString().slice(0, 10);
+  const refs = lead.integration_refs ?? {};
+
+  if (refs.due_for_six_month_recall === false) {
+    const dueDate = recallDueDate(lead.last_visit_date);
+    return Boolean(dueDate && dueDate.toISOString().slice(0, 10) <= todayDay);
+  }
+
+  if (lead.next_action_at) {
+    const nextActionDate = new Date(lead.next_action_at);
+    if (!Number.isNaN(nextActionDate.getTime()) && nextActionDate.toISOString().slice(0, 10) > todayDay) return false;
+  }
+
+  return true;
+}
+
 async function safeAudit(admin: AdminClient, payload: Record<string, unknown>) {
   await admin.from("audit_logs").insert(payload);
 }
@@ -206,7 +248,7 @@ export async function POST(request: NextRequest) {
     const requestedLimit = Math.max(1, Math.min(Number(payload.limit ?? 25), 250));
     let leadQuery = admin
       .from("leads")
-      .select("id,company_id,branch_id,status,priority_score,created_at")
+      .select("id,company_id,branch_id,status,next_action_at,last_visit_date,integration_refs,priority_score,created_at")
       .order("priority_score", { ascending: false })
       .order("created_at", { ascending: true })
       .limit(payload.lead_ids?.length ? payload.lead_ids.length : requestedLimit * 3);
@@ -224,8 +266,9 @@ export async function POST(request: NextRequest) {
     if (leadError) throw new Error(leadError.message);
     const candidateLeads = ((leads ?? []) as LeadRow[])
       .filter((lead) => leadAllowedByRequester(lead, roles, isSuper))
-      .filter((lead) => leadAssignableToUser(lead, targetUser as UserRow, targetRoleRows));
-    if (!candidateLeads.length) return jsonError("No eligible unassigned leads are available for the selected employee and scope.", 409);
+      .filter((lead) => leadAssignableToUser(lead, targetUser as UserRow, targetRoleRows))
+      .filter(isDueForAllocation);
+    if (!candidateLeads.length) return jsonError("No due, unassigned leads are available for the selected employee and scope. Future recall leads remain in the pipeline until their six-month review date.", 409);
 
     const candidateIds = candidateLeads.map((lead) => lead.id);
     const { data: existingAssignments, error: assignmentError } = await admin

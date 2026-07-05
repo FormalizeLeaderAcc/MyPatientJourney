@@ -1,10 +1,35 @@
 "use client";
 
-import { ArrowRight, BarChart3, CalendarClock, CloudUpload, ListChecks, Sparkles } from "lucide-react";
+import { ArrowRight, BarChart3, CloudUpload, ListChecks, Sparkles } from "lucide-react";
 import type { Lead } from "@/lib/types";
 
+const finalStatuses = ["Patient Booked and Verified", "Patient Not Interested", "Wrong Number Confirmed", "Manager Closed"];
+
 function isActiveLead(lead: Lead) {
-  return !["Patient Booked and Verified", "Patient Not Interested", "Wrong Number Confirmed", "Manager Closed"].includes(lead.status);
+  return !finalStatuses.includes(lead.status);
+}
+
+function addMonths(date: Date, months: number) {
+  const next = new Date(date);
+  next.setMonth(next.getMonth() + months);
+  return next;
+}
+
+function isDueForFollowUp(lead: Lead) {
+  if (!isActiveLead(lead)) return false;
+  const reason = lead.reason.toLowerCase();
+  if (reason.includes("not yet passed") || reason.includes("six-month review window")) return false;
+
+  if (lead.lastVisit && lead.lastVisit !== "Not supplied") {
+    const lastVisit = new Date(`${lead.lastVisit.slice(0, 10)}T00:00:00.000Z`);
+    if (!Number.isNaN(lastVisit.getTime())) {
+      return addMonths(lastVisit, 6).toISOString().slice(0, 10) <= new Date().toISOString().slice(0, 10);
+    }
+  }
+
+  if (lead.nextAction === "Due today" || lead.nextAction === "Overdue" || lead.nextAction === "Ready to allocate") return true;
+  const nextActionDate = new Date(`${lead.nextAction.slice(0, 10)}T00:00:00.000Z`);
+  return Number.isNaN(nextActionDate.getTime()) ? false : nextActionDate.toISOString().slice(0, 10) <= new Date().toISOString().slice(0, 10);
 }
 
 function MetricCard({ label, value, trend, tone }: { label: string; value: string; trend: string; tone: "teal" | "blue" | "violet" | "orange" | "rose" }) {
@@ -13,18 +38,21 @@ function MetricCard({ label, value, trend, tone }: { label: string; value: strin
 
 export function RecallCampaignsView({ leads, onNavigate }: { leads: Lead[]; onNavigate: (page: string) => void }) {
   const activeLeads = leads.filter(isActiveLead);
-  const unallocated = activeLeads.filter((lead) => lead.assignedTo === "Unallocated");
+  const dueForFollowUp = activeLeads.filter(isDueForFollowUp);
+  const dueUnallocated = dueForFollowUp.filter((lead) => lead.assignedTo === "Unallocated");
+  const futurePipeline = activeLeads.filter((lead) => !isDueForFollowUp(lead));
   const allocated = activeLeads.filter((lead) => lead.assignedTo !== "Unallocated");
   const managerReview = activeLeads.filter((lead) => lead.status === "Manager Review");
   const batches = Array.from(leads.reduce((map, lead) => {
-    const existing = map.get(lead.sourceBatch) ?? { total: 0, active: 0, unallocated: 0, allocated: 0 };
+    const existing = map.get(lead.sourceBatch) ?? { total: 0, active: 0, dueUnallocated: 0, future: 0, allocated: 0 };
     existing.total += 1;
     if (isActiveLead(lead)) existing.active += 1;
-    if (lead.assignedTo === "Unallocated") existing.unallocated += 1;
-    else existing.allocated += 1;
+    if (isDueForFollowUp(lead) && lead.assignedTo === "Unallocated") existing.dueUnallocated += 1;
+    if (isActiveLead(lead) && !isDueForFollowUp(lead)) existing.future += 1;
+    if (lead.assignedTo !== "Unallocated") existing.allocated += 1;
     map.set(lead.sourceBatch, existing);
     return map;
-  }, new Map<string, { total: number; active: number; unallocated: number; allocated: number }>()).entries());
+  }, new Map<string, { total: number; active: number; dueUnallocated: number; future: number; allocated: number }>()).entries());
 
   return <>
     <div className="page-head">
@@ -41,7 +69,7 @@ export function RecallCampaignsView({ leads, onNavigate }: { leads: Lead[]; onNa
     <div className="metric-grid">
       <MetricCard label="Total campaign leads" value={leads.length.toLocaleString()} trend="All imported recall opportunities" tone="teal" />
       <MetricCard label="Active leads" value={activeLeads.length.toLocaleString()} trend="Still in the recall journey" tone="blue" />
-      <MetricCard label="Unallocated" value={unallocated.length.toLocaleString()} trend="Ready for Lead Allocation" tone="orange" />
+      <MetricCard label="Due unallocated" value={dueUnallocated.length.toLocaleString()} trend="Ready for Lead Allocation" tone="orange" />
       <MetricCard label="Manager review" value={managerReview.length.toLocaleString()} trend="Needs operational decision" tone="rose" />
     </div>
 
@@ -56,7 +84,7 @@ export function RecallCampaignsView({ leads, onNavigate }: { leads: Lead[]; onNa
           </button>
           <button className="lead-card" style={{ textAlign: "left" }} onClick={() => onNavigate("allocation")}>
             <strong style={{ fontFamily: "Manrope", fontSize: 13 }}>2. Allocate unassigned leads</strong>
-            <p style={{ fontSize: 10, color: "#6f837f", lineHeight: 1.6 }}>{unallocated.length.toLocaleString()} active lead(s) currently need allocation to employees.</p>
+            <p style={{ fontSize: 10, color: "#6f837f", lineHeight: 1.6 }}>{dueUnallocated.length.toLocaleString()} due lead(s) currently need allocation to employees. {futurePipeline.length.toLocaleString()} future lead(s) are protected until their recall date.</p>
           </button>
           <button className="lead-card" style={{ textAlign: "left" }} onClick={() => onNavigate("reports")}>
             <strong style={{ fontFamily: "Manrope", fontSize: 13 }}>3. Review campaign performance</strong>
@@ -70,7 +98,8 @@ export function RecallCampaignsView({ leads, onNavigate }: { leads: Lead[]; onNa
         <div className="card-body">
           <div style={{ display: "grid", gap: 10 }}>
             <div className="lead-card" style={{ boxShadow: "none" }}><strong>{allocated.length.toLocaleString()} allocated</strong><p style={{ fontSize: 10, color: "#6f837f" }}>Already assigned to employees for patient follow-up.</p></div>
-            <div className="lead-card" style={{ boxShadow: "none" }}><strong>{unallocated.length.toLocaleString()} unallocated</strong><p style={{ fontSize: 10, color: "#6f837f" }}>Ready to move into employee work queues.</p></div>
+            <div className="lead-card" style={{ boxShadow: "none" }}><strong>{dueUnallocated.length.toLocaleString()} due unallocated</strong><p style={{ fontSize: 10, color: "#6f837f" }}>Ready to move into employee work queues.</p></div>
+            <div className="lead-card" style={{ boxShadow: "none" }}><strong>{futurePipeline.length.toLocaleString()} future pipeline</strong><p style={{ fontSize: 10, color: "#6f837f" }}>Stored safely until six-month recall review.</p></div>
             <div className="lead-card" style={{ boxShadow: "none" }}><strong>{activeLeads.filter((lead) => lead.nextAction === "Overdue").length.toLocaleString()} overdue</strong><p style={{ fontSize: 10, color: "#6f837f" }}>Needs attention before campaign momentum stalls.</p></div>
           </div>
         </div>
@@ -79,7 +108,7 @@ export function RecallCampaignsView({ leads, onNavigate }: { leads: Lead[]; onNa
 
     <div className="card" style={{ marginTop: 18 }}>
       <div className="card-head"><div><div className="card-title">Imported campaign batches</div><div className="card-sub">Each batch remains traceable to its upload/import source.</div></div></div>
-      {batches.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Source batch</th><th>Total leads</th><th>Active</th><th>Allocated</th><th>Unallocated</th><th>Next step</th></tr></thead><tbody>{batches.map(([batch, stats]) => <tr key={batch}><td><strong>{batch}</strong></td><td>{stats.total.toLocaleString()}</td><td>{stats.active.toLocaleString()}</td><td>{stats.allocated.toLocaleString()}</td><td>{stats.unallocated.toLocaleString()}</td><td>{stats.unallocated > 0 ? <button className="btn btn-soft" onClick={() => onNavigate("allocation")}>Allocate <ArrowRight size={12}/></button> : <span className="badge standard">Allocated</span>}</td></tr>)}</tbody></table></div> : <div className="empty-page" style={{ boxShadow: "none" }}><div className="empty-icon"><BarChart3 size={25}/></div><h2>No recall campaigns yet</h2><p>Upload a lead-ready list to create the first traceable recall campaign.</p><button className="btn btn-primary" onClick={() => onNavigate("upload")}><CloudUpload size={14}/>Open Upload Centre</button></div>}
+      {batches.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Source batch</th><th>Total leads</th><th>Active</th><th>Allocated</th><th>Due unallocated</th><th>Future pipeline</th><th>Next step</th></tr></thead><tbody>{batches.map(([batch, stats]) => <tr key={batch}><td><strong>{batch}</strong></td><td>{stats.total.toLocaleString()}</td><td>{stats.active.toLocaleString()}</td><td>{stats.allocated.toLocaleString()}</td><td>{stats.dueUnallocated.toLocaleString()}</td><td>{stats.future.toLocaleString()}</td><td>{stats.dueUnallocated > 0 ? <button className="btn btn-soft" onClick={() => onNavigate("allocation")}>Allocate <ArrowRight size={12}/></button> : <span className="badge standard">No due allocation</span>}</td></tr>)}</tbody></table></div> : <div className="empty-page" style={{ boxShadow: "none" }}><div className="empty-icon"><BarChart3 size={25}/></div><h2>No recall campaigns yet</h2><p>Upload a lead-ready list to create the first traceable recall campaign.</p><button className="btn btn-primary" onClick={() => onNavigate("upload")}><CloudUpload size={14}/>Open Upload Centre</button></div>}
     </div>
   </>;
 }
