@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowDownToLine, ChevronRight, Filter, Search, Shuffle, SlidersHorizontal, UserPlus } from "lucide-react";
+import { ArrowDownToLine, ChevronRight, Filter, Search, Shuffle, UserPlus } from "lucide-react";
 import type { AssignableUser, Lead, LeadStatus, Role } from "@/lib/types";
 
 function badgeClass(priority: string) {
@@ -178,8 +178,6 @@ export function LeadsView({
     <div className="toolbar">
       <div className="searchbar"><Search size={14} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search patient, account or phone..." /></div>
       <select className="select" value={filter} onChange={(e) => setFilter(e.target.value)}><option>All priorities</option><option>Premium</option><option>High</option><option>Dormant</option><option>Missing</option></select>
-      <select className="select"><option>All branches</option></select>
-      <button className="icon-btn"><SlidersHorizontal size={14} /></button>
     </div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,fontSize:9,color:"#859593"}}><span><strong style={{color:"#263f3d"}}>{displayedLeads.length}</strong> {isAllocationMode && role !== "employee" ? "eligible unallocated patient journeys shown" : "patient journeys shown"}</span>{isAllocationMode && <button className="btn btn-soft" disabled={allocating || role === "employee"} onClick={allocateVisibleLeads}><Shuffle size={13} />Auto-balance allocation</button>}</div>
     {displayedLeads.length ? <div className="lead-grid">{displayedLeads.map((lead) => <article className="lead-card" key={lead.id} onClick={() => onLead(lead)}>

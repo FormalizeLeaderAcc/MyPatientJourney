@@ -234,7 +234,7 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
     if (active === "verification") return <BookingVerification notify={notify} onRefresh={loadLeads} />;
     if (active === "companies" || active === "branches" || active === "users") return <CompaniesView mode={active} notify={notify} leads={leadData} />;
     if (active === "medical-aid") return <MedicalAidView notify={notify} />;
-    if (active === "team") return <TeamActivity onNavigate={navigate} />;
+    if (active === "team") return <TeamActivity leads={leadData} employees={assignableUsers} onNavigate={navigate} />;
     if (active === "reports") return <ReportsView leads={leadData} role={role} notify={notify} />;
     if (active === "settings") return <AccountSettingsView user={user} onUserUpdate={updateCurrentUser} notify={notify} />;
     return <PlaceholderView title={activeLabel} role={role} />;

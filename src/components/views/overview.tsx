@@ -57,7 +57,7 @@ export function Overview({ role, userName, leads, stats, onLead, onNavigate }: {
     ]
     : role === "manager"
       ? [
-        { label: "Allocated leads", value: activeLeads.length.toLocaleString(), trend: activeLeads.length ? "Active branch journeys" : "Awaiting allocation", tone: "teal" },
+        { label: "Active leads", value: activeLeads.length.toLocaleString(), trend: activeLeads.length ? "Live branch journeys" : "Awaiting allocation", tone: "teal" },
         { label: "Pending verification", value: pendingVerification.length.toLocaleString(), trend: pendingVerification.length ? "Needs calendar check" : "No bookings recorded yet", tone: "orange" },
         { label: "Overdue callbacks", value: overdueCallbacks.length.toLocaleString(), trend: overdueCallbacks.length ? "Needs attention" : "No overdue callbacks", tone: "rose" },
         { label: "Team activity", value: contacted.length.toLocaleString(), trend: contacted.length ? "Patients contacted" : "No activity yet", tone: "blue" },
@@ -86,8 +86,21 @@ export function Overview({ role, userName, leads, stats, onLead, onNavigate }: {
     </>}
 
     {role === "manager" && <>
-      <div className="dashboard-grid"><ChartCard /><EmptyCard title="Nothing to verify yet" body="Employee-recorded bookings will appear here for manager verification." action="Open verification" onAction={() => onNavigate("verification")} /></div>
-      <EmptyCard title="No employee activity yet" body="Once employees are added and leads are allocated, productivity will appear here." action="View team activity" onAction={() => onNavigate("team")} />
+      <div className="dashboard-grid">
+        <div className="card">
+          <div className="card-head"><div><div className="card-title">Follow-up health</div><div className="card-sub">Live state across this manager workspace</div></div></div>
+          <div className="card-body" style={{ display: "grid", gap: 10 }}>
+            <div className="lead-card" style={{ boxShadow: "none" }}><strong>{activeLeads.length.toLocaleString()} active patient journeys</strong><p style={{ fontSize: 10, color: "#6f837f" }}>{dueToday.length.toLocaleString()} due today · {overdueCallbacks.length.toLocaleString()} overdue callbacks</p></div>
+            <div className="lead-card" style={{ boxShadow: "none" }}><strong>{contacted.length.toLocaleString()} contacted journeys</strong><p style={{ fontSize: 10, color: "#6f837f" }}>{booked.length.toLocaleString()} booking(s) recorded or verified</p></div>
+            <div className="lead-card" style={{ boxShadow: "none" }}><strong>{pendingVerification.length.toLocaleString()} awaiting verification</strong><p style={{ fontSize: 10, color: "#6f837f" }}>Employee-recorded bookings that need calendar confirmation.</p></div>
+          </div>
+        </div>
+        {pendingVerification.length ? <EmptyCard title="Bookings need verification" body={`${pendingVerification.length.toLocaleString()} booking(s) are waiting for a manager calendar check.`} action="Open verification" onAction={() => onNavigate("verification")} /> : <EmptyCard title="No bookings awaiting verification" body="When employees record bookings, they will appear here for calendar confirmation." action="Open verification" onAction={() => onNavigate("verification")} />}
+      </div>
+      <div className="card">
+        <div className="card-head"><div><div className="card-title">Recent patient journeys</div><div className="card-sub">Open a live lead or review team performance</div></div><button className="btn btn-secondary" onClick={() => onNavigate("team")}>View team activity</button></div>
+        <LeadRows leads={leads} onLead={onLead} />
+      </div>
     </>}
 
     {role === "super" && <>
