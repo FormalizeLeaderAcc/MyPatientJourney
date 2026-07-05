@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { ArrowLeft, Mail, Send, ShieldCheck, Stethoscope } from "lucide-react";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { createSupabaseRecoveryClient } from "@/lib/supabase/client";
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
@@ -15,7 +15,7 @@ export default function ForgotPasswordPage() {
     setSending(true);
     setError("");
 
-    const supabase = createSupabaseBrowserClient();
+    const supabase = createSupabaseRecoveryClient();
     const { error: recoveryError } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: `${window.location.origin}/auth/confirm`,
     });

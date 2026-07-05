@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ArrowRight, CheckCircle2, KeyRound, LoaderCircle, ShieldCheck, Stethoscope } from "lucide-react";
+import type { EmailOtpType } from "@supabase/supabase-js";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { Role } from "@/lib/types";
 
@@ -15,6 +16,17 @@ function isTrustedConfirmationUrl(value: string) {
   } catch {
     return false;
   }
+}
+
+function cleanAuthUrl() {
+  window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+}
+
+function friendlyAuthError(message: string) {
+  if (message.toLowerCase().includes("pkce code verifier")) {
+    return "This secure link was created by the previous recovery flow and cannot be completed in this browser. Please request a fresh recovery email and use the newest link.";
+  }
+  return message;
 }
 
 export default function ConfirmAccountPage() {
@@ -37,19 +49,55 @@ export default function ConfirmAccountPage() {
       return;
     }
 
-    const supabase = createSupabaseBrowserClient();
     let timeout: number | undefined;
     let unsubscribe: (() => void) | undefined;
 
     async function establishSession() {
-      const code = new URLSearchParams(window.location.search).get("code");
+      const searchParams = new URLSearchParams(window.location.search);
+      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+      const linkError = searchParams.get("error_description") ?? hashParams.get("error_description");
+      const accessToken = hashParams.get("access_token");
+      const refreshToken = hashParams.get("refresh_token");
+      const hasAuthHash = Boolean(accessToken || refreshToken || hashParams.get("error") || hashParams.get("type"));
+
+      if (hasAuthHash) cleanAuthUrl();
+      if (linkError) {
+        setError(friendlyAuthError(linkError));
+        return;
+      }
+
+      const supabase = createSupabaseBrowserClient();
+
+      if (accessToken && refreshToken) {
+        const { error: sessionSetError } = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        });
+        if (sessionSetError) { setError(friendlyAuthError(sessionSetError.message)); return; }
+        setPhase("set_password");
+        return;
+      }
+
+      const tokenHash = searchParams.get("token_hash");
+      const type = searchParams.get("type");
+      if (tokenHash && type) {
+        const { error: otpError } = await supabase.auth.verifyOtp({
+          token_hash: tokenHash,
+          type: type as EmailOtpType,
+        });
+        if (otpError) { setError(friendlyAuthError(otpError.message)); return; }
+        setPhase("set_password");
+        return;
+      }
+
+      const code = searchParams.get("code");
       if (code) {
         const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
-        if (exchangeError) { setError(exchangeError.message); return; }
+        if (exchangeError) { setError(friendlyAuthError(exchangeError.message)); return; }
       }
 
       const { data, error: sessionError } = await supabase.auth.getSession();
-      if (sessionError) { setError(sessionError.message); return; }
+      if (sessionError) { setError(friendlyAuthError(sessionError.message)); return; }
       if (data.session) { setPhase("set_password"); return; }
 
       const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
