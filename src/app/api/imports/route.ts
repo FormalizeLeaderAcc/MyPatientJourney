@@ -2,26 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 
-type UploadType = "transactions" | "curated_contacts";
+type UploadType = "lead_ready";
 type SystemField =
   | "patient_name"
   | "account_number"
-  | "cellphone_number"
-  | "alternate_number"
-  | "whatsapp_number"
-  | "email"
+  | "last_treatment_date"
+  | "last_treatment_code"
+  | "last_treatment_description"
+  | "mobile_number"
+  | "alternative_number"
   | "medical_aid_name"
   | "medical_aid_option"
-  | "transaction_date"
-  | "treatment_code"
-  | "branch"
-  | "practitioner"
-  | "amount_charged"
-  | "last_visit_date"
-  | "last_8101_date"
-  | "last_8159_date"
-  | "notes"
-  | "priority";
+  | "last_visit_total_amount_charged";
 
 type ImportPayload = {
   company_id: string;
@@ -35,27 +27,26 @@ type ImportPayload = {
 
 type AdminClient = ReturnType<typeof createClient<any, "public", any>>;
 type BranchRow = { id: string; name: string; company_id: string };
-type MedicalAidOptionRow = {
-  option_name: string;
-  quality_score: number;
-  category: "unknown" | "low" | "medium" | "high" | "premium";
-  medical_aid_schemes?: { name: string; company_id: string | null } | Array<{ name: string; company_id: string | null }> | null;
-};
 
-const requiredFields: Record<UploadType, SystemField[]> = {
-  transactions: ["patient_name", "account_number", "transaction_date", "treatment_code"],
-  curated_contacts: ["patient_name", "account_number", "cellphone_number"],
-};
-
-const finalPriorityLabels = new Set([
-  "Premium Recall Opportunity",
-  "High Medical Aid Opportunity",
-  "Standard Six-Month Recall",
-  "Dormant Patient",
-  "Missing Data Review",
-  "No Recent 8159",
-  "No Recent 8101 or 8159",
-]);
+const requiredFields: SystemField[] = ["patient_name", "account_number", "last_treatment_date"];
+const recommendedFields: SystemField[] = [
+  "last_treatment_code",
+  "last_treatment_description",
+  "mobile_number",
+  "alternative_number",
+  "medical_aid_name",
+  "medical_aid_option",
+  "last_visit_total_amount_charged",
+];
+const finalLeadStatuses = [
+  "patient_booked_and_verified",
+  "patient_not_interested",
+  "wrong_number_confirmed",
+  "patient_moved_away",
+  "patient_deceased",
+  "duplicate",
+  "manager_closed",
+].join(",");
 
 function jsonError(message: string, status = 400, details?: unknown) {
   return NextResponse.json({ error: message, details }, { status });
@@ -65,14 +56,9 @@ function normalize(value: unknown) {
   return String(value ?? "").trim();
 }
 
-function normalizeKey(value: unknown) {
-  return normalize(value).toLowerCase().replace(/\s+/g, " ");
-}
-
 function mappedValue(row: Record<string, unknown>, mappings: Partial<Record<SystemField, string>>, field: SystemField) {
   const source = mappings[field];
-  if (!source) return "";
-  return normalize(row[source]);
+  return source ? normalize(row[source]) : "";
 }
 
 function parseDate(value: unknown): string | null {
@@ -101,25 +87,36 @@ function parseAmount(value: unknown) {
   return Number.isFinite(amount) ? amount : null;
 }
 
+function cleanPhone(value: unknown) {
+  const raw = normalize(value);
+  if (!raw) return "";
+  let digits = raw.replace(/\D/g, "");
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  if (digits.startsWith("27") && digits.length === 11) return `+${digits}`;
+  if (digits.startsWith("0") && digits.length === 10) return `+27${digits.slice(1)}`;
+  if (digits.length === 9) return `+27${digits}`;
+  if (digits.length >= 10 && digits.length <= 15) return `+${digits}`;
+  return null;
+}
+
 function addMonths(date: Date, months: number) {
   const next = new Date(date);
   next.setMonth(next.getMonth() + months);
   return next;
 }
 
-function dateMax(values: Array<string | null | undefined>) {
-  return values.filter(Boolean).sort().at(-1) ?? null;
+function isSixMonthRecallDue(lastTreatmentDate: string) {
+  return lastTreatmentDate <= addMonths(new Date(), -6).toISOString().slice(0, 10);
 }
 
-function safePriority(value: string, fallback: string) {
-  const exact = Array.from(finalPriorityLabels).find((label) => label.toLowerCase() === value.toLowerCase());
-  return exact ?? fallback;
+function treatmentCodesContain(codes: string, code: "8101" | "8159") {
+  return codes.split(/[,;/\s]+/).map((item) => item.trim()).includes(code);
 }
 
-function validateMappings(uploadType: UploadType, mappings: Partial<Record<SystemField, string>>, headers: string[]) {
+function validateMappings(mappings: Partial<Record<SystemField, string>>, headers: string[]) {
   const issues: string[] = [];
   const headerSet = new Set(headers);
-  for (const field of requiredFields[uploadType]) {
+  for (const field of requiredFields) {
     if (!mappings[field]) issues.push(`${field} is required but not mapped`);
   }
   for (const [field, source] of Object.entries(mappings)) {
@@ -127,24 +124,42 @@ function validateMappings(uploadType: UploadType, mappings: Partial<Record<Syste
   }
   const selected = Object.values(mappings).filter(Boolean);
   const duplicates = selected.filter((source, index) => selected.indexOf(source) !== index);
-  if (duplicates.length) issues.push(`Duplicate source column mapping detected: ${Array.from(new Set(duplicates)).join(", ")}`);
+  if (duplicates.length) issues.push(`One source column cannot be mapped to multiple lead fields: ${Array.from(new Set(duplicates)).join(", ")}`);
   return issues;
 }
 
-function validateRows(uploadType: UploadType, rows: Record<string, unknown>[], mappings: Partial<Record<SystemField, string>>) {
+function validateRows(rows: Record<string, unknown>[], mappings: Partial<Record<SystemField, string>>) {
   const rejected: Array<{ row: number; issues: string[] }> = [];
+  const warnings: Array<{ row: number; issues: string[] }> = [];
+
   rows.forEach((row, index) => {
+    const rowNumber = index + 2;
     const issues: string[] = [];
-    for (const field of requiredFields[uploadType]) {
+    const rowWarnings: string[] = [];
+
+    for (const field of requiredFields) {
       if (!mappedValue(row, mappings, field)) issues.push(`${field} is missing`);
     }
-    if (uploadType === "transactions") {
-      if (!parseDate(mappedValue(row, mappings, "transaction_date"))) issues.push("transaction_date is invalid");
-      if (!mappedValue(row, mappings, "treatment_code").match(/^\d{3,8}[A-Z]?$/i)) issues.push("treatment_code is invalid");
+
+    const lastTreatmentDate = mappedValue(row, mappings, "last_treatment_date");
+    if (lastTreatmentDate && !parseDate(lastTreatmentDate)) issues.push("last_treatment_date is invalid");
+
+    const mobile = mappedValue(row, mappings, "mobile_number");
+    if (mobile && cleanPhone(mobile) === null) issues.push("mobile_number format is invalid");
+    if (!mobile) rowWarnings.push("mobile_number is missing; the lead will import but should be reviewed before contact");
+
+    const amount = mappedValue(row, mappings, "last_visit_total_amount_charged");
+    if (amount && parseAmount(amount) === null) issues.push("last_visit_total_amount_charged must be numeric");
+
+    for (const field of recommendedFields) {
+      if (!mappings[field]) rowWarnings.push(`${field} is not mapped`);
     }
-    if (issues.length) rejected.push({ row: index + 2, issues });
+
+    if (issues.length) rejected.push({ row: rowNumber, issues });
+    if (rowWarnings.length) warnings.push({ row: rowNumber, issues: Array.from(new Set(rowWarnings)) });
   });
-  return rejected;
+
+  return { rejected, warnings };
 }
 
 async function safeAudit(admin: AdminClient, data: Record<string, unknown>) {
@@ -171,37 +186,14 @@ async function getActor(request: NextRequest, supabaseUrl: string, anonKey: stri
   const { data: roles, error: roleError } = await admin.from("user_roles").select("role,company_id").eq("user_id", authData.user.id);
   if (roleError) throw new Error(roleError.message);
   const isImporter = (roles ?? []).some((role) => ["super_user", "sub_super_user"].includes(String(role.role)));
-  if (!isImporter) throw new Error("Only Super Users and Sub Super Users can import patient lists.");
+  if (!isImporter) throw new Error("Only Super Users and Sub Super Users can import lead-ready patient lists.");
   return { admin, actorId: authData.user.id };
-}
-
-async function loadMedicalAidScores(admin: AdminClient, companyId: string) {
-  const { data } = await admin
-    .from("medical_aid_options")
-    .select("option_name,quality_score,category,medical_aid_schemes(name,company_id)");
-  const map = new Map<string, MedicalAidOptionRow>();
-  for (const row of (data ?? []) as unknown as MedicalAidOptionRow[]) {
-    const scheme = Array.isArray(row.medical_aid_schemes) ? row.medical_aid_schemes[0] : row.medical_aid_schemes;
-    if (scheme?.company_id && scheme.company_id !== companyId) continue;
-    map.set(`${normalizeKey(scheme?.name)}::${normalizeKey(row.option_name)}`, row);
-  }
-  return map;
-}
-
-function medicalAidScore(scores: Map<string, MedicalAidOptionRow>, scheme: string, option: string) {
-  return scores.get(`${normalizeKey(scheme)}::${normalizeKey(option)}`);
 }
 
 async function resolveBranches(admin: AdminClient, companyId: string) {
   const { data, error } = await admin.from("branches").select("id,name,company_id").eq("company_id", companyId);
   if (error) throw new Error(error.message);
   return (data ?? []) as BranchRow[];
-}
-
-function resolveBranchId(selectedBranchId: string | null | undefined, rowBranchName: string, branches: BranchRow[]) {
-  if (selectedBranchId) return selectedBranchId;
-  if (!rowBranchName) return null;
-  return branches.find((branch) => normalizeKey(branch.name) === normalizeKey(rowBranchName))?.id ?? null;
 }
 
 async function upsertPatient(admin: AdminClient, payload: {
@@ -228,8 +220,26 @@ async function upsertPatient(admin: AdminClient, payload: {
   return data.id as string;
 }
 
-async function insertContact(admin: AdminClient, patientId: string, importBatchId: string, contactType: string, value: string, isPrimary: boolean, actorId: string) {
+async function upsertContact(admin: AdminClient, patientId: string, importBatchId: string, contactType: "mobile" | "alternate", value: string, isPrimary: boolean, actorId: string) {
   if (!value) return;
+  const { data: existingContacts, error: existingError } = await admin
+    .from("patient_contacts")
+    .select("id,value,manual_override")
+    .eq("patient_id", patientId)
+    .eq("contact_type", contactType);
+  if (existingError) throw new Error(existingError.message);
+  const manualContact = (existingContacts ?? []).find((contact) => Boolean(contact.manual_override));
+  if (manualContact) return;
+
+  const existing = (existingContacts ?? []).find((contact) => contact.value === value);
+  if (existing?.id) {
+    const { error } = await admin
+      .from("patient_contacts")
+      .update({ is_primary: isPrimary, updated_by: actorId, source_import_batch_id: importBatchId, manual_override: false })
+      .eq("id", existing.id);
+    if (error) throw new Error(error.message);
+    return;
+  }
   const { error } = await admin.from("patient_contacts").insert({
     patient_id: patientId,
     contact_type: contactType,
@@ -238,166 +248,59 @@ async function insertContact(admin: AdminClient, patientId: string, importBatchI
     is_verified: false,
     updated_by: actorId,
     source_import_batch_id: importBatchId,
+    manual_override: false,
   });
   if (error) throw new Error(error.message);
 }
 
-async function importTransactions(
-  admin: AdminClient,
-  actorId: string,
-  payload: ImportPayload,
-  uploadedFileId: string,
-  importBatchId: string,
-  branches: BranchRow[],
-  aidScores: Map<string, MedicalAidOptionRow>,
-) {
-  const patientSummaries = new Map<string, {
-    patientId: string;
-    accountNumber: string;
-    fullName: string;
-    branchId: string | null;
-    medicalAidScheme: string;
-    medicalAidOption: string;
-    phone: string;
-    txns: Array<{ date: string; code: string }>;
-  }>();
-  let importedRows = 0;
+async function findActiveLead(admin: AdminClient, companyId: string, patientId: string, branchId: string | null) {
+  let query = admin
+    .from("leads")
+    .select("id,integration_refs")
+    .eq("company_id", companyId)
+    .eq("patient_id", patientId)
+    .not("status", "in", `(${finalLeadStatuses})`)
+    .order("created_at", { ascending: false })
+    .limit(1);
 
-  for (const [index, row] of payload.rows.entries()) {
-    const patientName = mappedValue(row, payload.mappings, "patient_name");
-    const accountNumber = mappedValue(row, payload.mappings, "account_number");
-    const transactionDate = parseDate(mappedValue(row, payload.mappings, "transaction_date"));
-    const treatmentCode = mappedValue(row, payload.mappings, "treatment_code").toUpperCase();
-    if (!patientName || !accountNumber || !transactionDate || !treatmentCode) continue;
-
-    const medicalAidScheme = mappedValue(row, payload.mappings, "medical_aid_name");
-    const medicalAidOption = mappedValue(row, payload.mappings, "medical_aid_option");
-    const branchId = resolveBranchId(payload.branch_id, mappedValue(row, payload.mappings, "branch"), branches);
-    const patientId = await upsertPatient(admin, {
-      companyId: payload.company_id,
-      accountNumber,
-      fullName: patientName,
-      medicalAidScheme,
-      medicalAidOption,
-      importBatchId,
-    });
-
-    await insertContact(admin, patientId, importBatchId, "mobile", mappedValue(row, payload.mappings, "cellphone_number"), true, actorId);
-    await insertContact(admin, patientId, importBatchId, "alternate", mappedValue(row, payload.mappings, "alternate_number"), false, actorId);
-
-    const { error } = await admin.from("transactions").insert({
-      import_batch_id: importBatchId,
-      patient_id: patientId,
-      branch_id: branchId,
-      transaction_date: transactionDate,
-      treatment_code: treatmentCode,
-      practitioner: mappedValue(row, payload.mappings, "practitioner") || null,
-      amount_charged: parseAmount(mappedValue(row, payload.mappings, "amount_charged")),
-      source_row_number: index + 2,
-      source_payload: row,
-    });
-    if (error) throw new Error(error.message);
-    importedRows += 1;
-
-    const key = `${payload.company_id}::${accountNumber}`;
-    const current = patientSummaries.get(key) ?? {
-      patientId,
-      accountNumber,
-      fullName: patientName,
-      branchId,
-      medicalAidScheme,
-      medicalAidOption,
-      phone: mappedValue(row, payload.mappings, "cellphone_number"),
-      txns: [],
-    };
-    current.txns.push({ date: transactionDate, code: treatmentCode });
-    if (!current.branchId && branchId) current.branchId = branchId;
-    patientSummaries.set(key, current);
-  }
-
-  const now = new Date();
-  const sixMonthsAgo = addMonths(now, -6).toISOString().slice(0, 10);
-  const twelveMonthsAgo = addMonths(now, -12).toISOString().slice(0, 10);
-  let generatedLeads = 0;
-
-  for (const summary of patientSummaries.values()) {
-    const recallTxns = summary.txns.filter((txn) => txn.code === "8101" || txn.code === "8159");
-    const lastVisit = dateMax(summary.txns.map((txn) => txn.date));
-    const last8101 = dateMax(summary.txns.filter((txn) => txn.code === "8101").map((txn) => txn.date));
-    const last8159 = dateMax(summary.txns.filter((txn) => txn.code === "8159").map((txn) => txn.date));
-    const hasRecent8101 = Boolean(last8101 && last8101 >= sixMonthsAgo);
-    const hasRecent8159 = Boolean(last8159 && last8159 >= sixMonthsAgo);
-    const noRecentRecallCodes = !hasRecent8101 && !hasRecent8159;
-    const dormant = !recallTxns.length || Boolean(dateMax(recallTxns.map((txn) => txn.date)) && dateMax(recallTxns.map((txn) => txn.date))! < twelveMonthsAgo);
-    const noRecent8159 = Boolean(last8101 && !hasRecent8159);
-    const score = medicalAidScore(aidScores, summary.medicalAidScheme, summary.medicalAidOption);
-    const highAid = score && (score.category === "high" || score.category === "premium" || score.quality_score >= 70);
-    const dueAfter8159 = Boolean(last8159 && last8159 < sixMonthsAgo && !summary.txns.some((txn) => txn.date > last8159));
-
-    if (!noRecentRecallCodes && !dormant && !noRecent8159 && !highAid && !dueAfter8159) continue;
-
-    const missingPhone = !summary.phone;
-    const priorityLabel = missingPhone
-      ? "Missing Data Review"
-      : score?.category === "premium" || (score?.quality_score ?? 0) >= 85
-        ? "Premium Recall Opportunity"
-        : highAid
-          ? "High Medical Aid Opportunity"
-          : dormant
-            ? "Dormant Patient"
-            : noRecent8159
-              ? "No Recent 8159"
-              : "No Recent 8101 or 8159";
-
-    const reason = [
-      noRecentRecallCodes ? "No 8101 or 8159 charged in the last 6 months" : "",
-      dueAfter8159 ? "8159 was charged but patient has not returned after 6 months" : "",
-      noRecent8159 ? "Patient had 8101 but no recent 8159" : "",
-      dormant ? "No 8101 or 8159 in over 12 months" : "",
-      highAid ? `Medical aid option scored ${score?.quality_score ?? "high"}` : "",
-      missingPhone ? "Missing primary contact number" : "",
-    ].filter(Boolean).join("; ");
-
-    const { error } = await admin.from("leads").insert({
-      company_id: payload.company_id,
-      branch_id: summary.branchId,
-      patient_id: summary.patientId,
-      source_import_batch_id: importBatchId,
-      status: "new",
-      priority_label: priorityLabel,
-      priority_score: missingPhone ? 20 : score?.quality_score ?? (dormant ? 45 : 60),
-      recall_reason: reason || "Standard six-month recall opportunity",
-      last_visit_date: lastVisit,
-      last_8101_date: last8101,
-      last_8159_date: last8159,
-      next_action_at: new Date().toISOString(),
-      integration_refs: { uploaded_file_id: uploadedFileId },
-    });
-    if (error) throw new Error(error.message);
-    generatedLeads += 1;
-  }
-
-  return { importedRows, generatedLeads };
+  query = branchId ? query.eq("branch_id", branchId) : query.is("branch_id", null);
+  const { data, error } = await query.maybeSingle();
+  if (error) throw new Error(error.message);
+  return data as { id: string; integration_refs: Record<string, unknown> | null } | null;
 }
 
-async function importCuratedContacts(
+async function importLeadRows(
   admin: AdminClient,
   actorId: string,
   payload: ImportPayload,
   uploadedFileId: string,
   importBatchId: string,
-  branches: BranchRow[],
 ) {
   let importedRows = 0;
-  let generatedLeads = 0;
+  let createdLeads = 0;
+  let updatedLeads = 0;
+
   for (const [index, row] of payload.rows.entries()) {
     const patientName = mappedValue(row, payload.mappings, "patient_name");
     const accountNumber = mappedValue(row, payload.mappings, "account_number");
-    const phone = mappedValue(row, payload.mappings, "cellphone_number");
-    if (!patientName || !accountNumber || !phone) continue;
-    const branchId = resolveBranchId(payload.branch_id, mappedValue(row, payload.mappings, "branch"), branches);
+    const lastTreatmentDate = parseDate(mappedValue(row, payload.mappings, "last_treatment_date"));
+    if (!patientName || !accountNumber || !lastTreatmentDate) continue;
+
+    const mobile = cleanPhone(mappedValue(row, payload.mappings, "mobile_number")) || "";
+    const alternative = cleanPhone(mappedValue(row, payload.mappings, "alternative_number")) || "";
     const medicalAidScheme = mappedValue(row, payload.mappings, "medical_aid_name");
     const medicalAidOption = mappedValue(row, payload.mappings, "medical_aid_option");
+    const treatmentCode = mappedValue(row, payload.mappings, "last_treatment_code");
+    const treatmentDescription = mappedValue(row, payload.mappings, "last_treatment_description");
+    const amount = parseAmount(mappedValue(row, payload.mappings, "last_visit_total_amount_charged"));
+    const dueForSixMonthRecall = isSixMonthRecallDue(lastTreatmentDate);
+    const missingContact = !mobile && !alternative;
+    const priorityLabel = missingContact
+      ? "Missing Data Review"
+      : "Standard Six-Month Recall";
+    const recallReason = dueForSixMonthRecall
+      ? `Last treatment date was ${lastTreatmentDate}; patient has passed the six-month review window.`
+      : `Last treatment date was ${lastTreatmentDate}; patient has not yet passed the six-month review window.`;
     const patientId = await upsertPatient(admin, {
       companyId: payload.company_id,
       accountNumber,
@@ -406,36 +309,54 @@ async function importCuratedContacts(
       medicalAidOption,
       importBatchId,
     });
-    await insertContact(admin, patientId, importBatchId, "mobile", phone, true, actorId);
-    await insertContact(admin, patientId, importBatchId, "alternate", mappedValue(row, payload.mappings, "alternate_number"), false, actorId);
-    await insertContact(admin, patientId, importBatchId, "whatsapp", mappedValue(row, payload.mappings, "whatsapp_number"), false, actorId);
-    await insertContact(admin, patientId, importBatchId, "email", mappedValue(row, payload.mappings, "email"), false, actorId);
 
-    const priority = safePriority(mappedValue(row, payload.mappings, "priority"), phone ? "Standard Six-Month Recall" : "Missing Data Review");
-    const lastVisit = parseDate(mappedValue(row, payload.mappings, "last_visit_date"));
-    const last8101 = parseDate(mappedValue(row, payload.mappings, "last_8101_date"));
-    const last8159 = parseDate(mappedValue(row, payload.mappings, "last_8159_date"));
-    const notes = mappedValue(row, payload.mappings, "notes");
-    const { error } = await admin.from("leads").insert({
+    await upsertContact(admin, patientId, importBatchId, "mobile", mobile, true, actorId);
+    await upsertContact(admin, patientId, importBatchId, "alternate", alternative, false, actorId);
+
+    const existingLead = await findActiveLead(admin, payload.company_id, patientId, payload.branch_id || null);
+    const integrationRefs = {
+      ...(existingLead?.integration_refs ?? {}),
+      lead_source: "lead_ready_upload",
+      lead_type: "patient_recall_follow_up",
+      uploaded_file_id: uploadedFileId,
+      import_batch_id: importBatchId,
+      source_row_number: index + 2,
+      last_treatment_code: treatmentCode || null,
+      last_treatment_description: treatmentDescription || null,
+      last_visit_total_amount_charged: amount,
+      mobile_number: mobile || null,
+      alternative_number: alternative || null,
+      due_for_six_month_recall: dueForSixMonthRecall,
+    };
+    const leadPayload = {
       company_id: payload.company_id,
-      branch_id: branchId,
+      branch_id: payload.branch_id || null,
       patient_id: patientId,
       source_import_batch_id: importBatchId,
-      status: "new",
-      priority_label: priority,
-      priority_score: priority.includes("Premium") ? 90 : priority.includes("High") ? 75 : priority.includes("Dormant") ? 45 : 60,
-      recall_reason: notes || "Curated patient follow-up list",
-      last_visit_date: lastVisit,
-      last_8101_date: last8101,
-      last_8159_date: last8159,
+      priority_label: priorityLabel,
+      priority_score: missingContact ? 25 : dueForSixMonthRecall ? 65 : 45,
+      recall_reason: missingContact ? `${recallReason} Contact number is missing or incomplete.` : recallReason,
+      last_visit_date: lastTreatmentDate,
+      last_8101_date: treatmentCodesContain(treatmentCode, "8101") ? lastTreatmentDate : null,
+      last_8159_date: treatmentCodesContain(treatmentCode, "8159") ? lastTreatmentDate : null,
       next_action_at: new Date().toISOString(),
-      integration_refs: { uploaded_file_id: uploadedFileId, source_row_number: index + 2 },
-    });
-    if (error) throw new Error(error.message);
+      integration_refs: integrationRefs,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (existingLead) {
+      const { error } = await admin.from("leads").update(leadPayload).eq("id", existingLead.id);
+      if (error) throw new Error(error.message);
+      updatedLeads += 1;
+    } else {
+      const { error } = await admin.from("leads").insert({ ...leadPayload, status: "new" });
+      if (error) throw new Error(error.message);
+      createdLeads += 1;
+    }
     importedRows += 1;
-    generatedLeads += 1;
   }
-  return { importedRows, generatedLeads };
+
+  return { importedRows, createdLeads, updatedLeads, generatedLeads: createdLeads + updatedLeads };
 }
 
 export async function POST(request: NextRequest) {
@@ -447,15 +368,20 @@ export async function POST(request: NextRequest) {
 
   try {
     const payload = await request.json() as ImportPayload;
+    if (payload.upload_type !== "lead_ready") return jsonError("Only lead-ready spreadsheets can be imported from the Upload Leads section.");
     if (!payload.company_id) return jsonError("Select a company before importing.");
     if (!payload.original_name?.trim()) return jsonError("Original file name is required.");
     if (!payload.rows?.length) return jsonError("No spreadsheet rows were supplied for import.");
 
     const headers = Object.keys(payload.rows[0] ?? {});
-    const mappingIssues = validateMappings(payload.upload_type, payload.mappings, headers);
-    const rejectedRows = validateRows(payload.upload_type, payload.rows, payload.mappings);
-    if (mappingIssues.length || rejectedRows.length) {
-      return jsonError("Import validation failed.", 422, { mappingIssues, rejectedRows: rejectedRows.slice(0, 50) });
+    const mappingIssues = validateMappings(payload.mappings, headers);
+    const rowValidation = validateRows(payload.rows, payload.mappings);
+    if (mappingIssues.length || rowValidation.rejected.length) {
+      return jsonError("Import validation failed.", 422, {
+        mappingIssues,
+        rejectedRows: rowValidation.rejected.slice(0, 50),
+        warnings: rowValidation.warnings.slice(0, 50),
+      });
     }
 
     const { admin, actorId } = await getActor(request, supabaseUrl, anonKey, serviceRoleKey);
@@ -467,7 +393,7 @@ export async function POST(request: NextRequest) {
     const { data: uploadedFile, error: fileError } = await admin.from("uploaded_files").insert({
       company_id: payload.company_id,
       branch_id: payload.branch_id || null,
-      upload_type: payload.upload_type === "transactions" ? "transactions" : "curated_contacts",
+      upload_type: "lead_ready",
       original_name: payload.original_name,
       storage_path: `inline-import/${payload.company_id}/${Date.now()}-${payload.original_name.replace(/[^a-z0-9_.-]/gi, "_")}`,
       file_hash: payload.file_hash || null,
@@ -484,6 +410,7 @@ export async function POST(request: NextRequest) {
         mappings: payload.mappings,
         upload_type: payload.upload_type,
         file_hash: payload.file_hash || null,
+        warnings: rowValidation.warnings.slice(0, 250),
       },
       imported_rows: 0,
       rejected_rows: 0,
@@ -505,10 +432,7 @@ export async function POST(request: NextRequest) {
       if (error) throw new Error(error.message);
     }
 
-    const aidScores = await loadMedicalAidScores(admin, payload.company_id);
-    const result = payload.upload_type === "transactions"
-      ? await importTransactions(admin, actorId, payload, uploadedFile.id, batch.id, branches, aidScores)
-      : await importCuratedContacts(admin, actorId, payload, uploadedFile.id, batch.id, branches);
+    const result = await importLeadRows(admin, actorId, payload, uploadedFile.id, batch.id);
 
     const { error: completeError } = await admin.from("import_batches").update({
       status: "completed",
@@ -523,24 +447,27 @@ export async function POST(request: NextRequest) {
       actor_id: actorId,
       entity_type: "import_batch",
       entity_id: batch.id,
-      action: "imported_uploaded_list",
+      action: "imported_lead_ready_list",
       after_data: {
         uploaded_file_id: uploadedFile.id,
         original_name: payload.original_name,
         upload_type: payload.upload_type,
         row_count: payload.rows.length,
         imported_rows: result.importedRows,
-        generated_leads: result.generatedLeads,
+        created_leads: result.createdLeads,
+        updated_leads: result.updatedLeads,
+        warning_rows: rowValidation.warnings.length,
       },
     });
 
     return NextResponse.json({
-      message: `Import completed: ${result.importedRows} row(s), ${result.generatedLeads} lead(s) generated`,
+      message: `Lead import completed: ${result.importedRows} row(s), ${result.createdLeads} new lead(s), ${result.updatedLeads} updated lead(s)`,
       uploaded_file_id: uploadedFile.id,
       import_batch_id: batch.id,
+      warnings: rowValidation.warnings.slice(0, 50),
       ...result,
     });
   } catch (error) {
-    return jsonError(error instanceof Error ? error.message : "Unable to import uploaded list.", 500);
+    return jsonError(error instanceof Error ? error.message : "Unable to import lead-ready list.", 500);
   }
 }

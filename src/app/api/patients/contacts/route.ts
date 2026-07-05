@@ -54,6 +54,8 @@ export async function POST(request: NextRequest) {
     is_primary: Boolean(payload.is_primary),
     updated_by: authData.user.id,
     updated_at: new Date().toISOString(),
+    manual_override: true,
+    manual_override_at: new Date().toISOString(),
   };
 
   const result = payload.contact_id

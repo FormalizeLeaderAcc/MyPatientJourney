@@ -1,7 +1,24 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, Building2, Check, CheckCircle2, ChevronRight, FileSpreadsheet, Info, LoaderCircle, RotateCcw, ShieldAlert, Sparkles, Trash2, UploadCloud } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowRight,
+  Building2,
+  CheckCircle2,
+  ChevronRight,
+  Download,
+  FileCheck2,
+  FileSpreadsheet,
+  Info,
+  LoaderCircle,
+  RotateCcw,
+  ShieldAlert,
+  Sparkles,
+  Trash2,
+  UploadCloud,
+  Wand2,
+} from "lucide-react";
 import { createSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client";
 
 type Company = { id: string; name: string };
@@ -15,63 +32,117 @@ type UploadedList = {
   row_count: number | null;
   created_at: string;
 };
-type UploadType = "transactions" | "curated_contacts";
-type SystemField =
+
+type CleanupField =
   | "patient_name"
+  | "account_holder"
   | "account_number"
+  | "transaction_date"
+  | "treatment_code"
+  | "treatment_description"
   | "cellphone_number"
-  | "alternate_number"
-  | "whatsapp_number"
+  | "telephone_number"
+  | "private_number"
+  | "alternative_number"
   | "email"
   | "medical_aid_name"
   | "medical_aid_option"
-  | "transaction_date"
-  | "treatment_code"
   | "branch"
   | "practitioner"
-  | "amount_charged"
-  | "last_visit_date"
-  | "last_8101_date"
-  | "last_8159_date"
-  | "notes"
-  | "priority";
+  | "amount_charged";
 
-type TargetField = {
-  key: SystemField;
+type LeadField =
+  | "patient_name"
+  | "account_number"
+  | "last_treatment_date"
+  | "last_treatment_code"
+  | "last_treatment_description"
+  | "mobile_number"
+  | "alternative_number"
+  | "medical_aid_name"
+  | "medical_aid_option"
+  | "last_visit_total_amount_charged";
+
+type TargetField<T extends string> = {
+  key: T;
   label: string;
-  requiredFor: UploadType[];
+  required?: boolean;
   aliases: string[];
 };
 
-const targetFields: TargetField[] = [
-  { key: "patient_name", label: "Patient name", requiredFor: ["transactions", "curated_contacts"], aliases: ["patient name", "patient full name", "name", "member name"] },
-  { key: "account_number", label: "Account number", requiredFor: ["transactions", "curated_contacts"], aliases: ["account number", "account no", "account", "patient number", "file number"] },
-  { key: "cellphone_number", label: "Cellphone number", requiredFor: ["curated_contacts"], aliases: ["cellphone", "cellphone number", "mobile", "mobile number", "phone", "contact number"] },
-  { key: "alternate_number", label: "Alternate number", requiredFor: [], aliases: ["alternate number", "alt phone", "home phone", "work phone"] },
-  { key: "whatsapp_number", label: "WhatsApp number", requiredFor: [], aliases: ["whatsapp", "whatsapp number", "wa number"] },
-  { key: "email", label: "Email address", requiredFor: [], aliases: ["email", "email address", "patient email"] },
-  { key: "medical_aid_name", label: "Medical aid name", requiredFor: [], aliases: ["medical aid", "medical aid name", "scheme", "scheme name"] },
-  { key: "medical_aid_option", label: "Medical aid option", requiredFor: [], aliases: ["medical aid option", "option", "plan", "benefit option"] },
-  { key: "transaction_date", label: "Transaction date", requiredFor: ["transactions"], aliases: ["transaction date", "txn date", "date", "service date", "treatment date"] },
-  { key: "treatment_code", label: "Treatment code", requiredFor: ["transactions"], aliases: ["treatment code", "code", "tariff code", "procedure code"] },
-  { key: "branch", label: "Branch", requiredFor: [], aliases: ["branch", "practice branch", "location", "practice"] },
-  { key: "practitioner", label: "Practitioner", requiredFor: [], aliases: ["practitioner", "provider", "doctor", "dentist"] },
-  { key: "amount_charged", label: "Amount charged", requiredFor: [], aliases: ["amount charged", "amount", "charge", "fee"] },
-  { key: "last_visit_date", label: "Last visit date", requiredFor: [], aliases: ["last visit date", "last visit", "last seen"] },
-  { key: "last_8101_date", label: "Last 8101 date", requiredFor: [], aliases: ["last 8101", "last 8101 date", "consultation date"] },
-  { key: "last_8159_date", label: "Last 8159 date", requiredFor: [], aliases: ["last 8159", "last 8159 date", "oral hygiene date", "scaling date"] },
-  { key: "notes", label: "Notes", requiredFor: [], aliases: ["notes", "comment", "comments", "remarks"] },
-  { key: "priority", label: "Priority", requiredFor: [], aliases: ["priority", "priority tag", "recall priority"] },
+type CleanupDataset = {
+  id: string;
+  fileName: string;
+  sheetName: string;
+  headers: string[];
+  rows: Record<string, unknown>[];
+  mappings: Partial<Record<CleanupField, string>>;
+};
+
+const leadReadyColumns = [
+  "Patient Name",
+  "Account Number",
+  "Last Treatment Date",
+  "Last Treatment Code",
+  "Last Treatment Description",
+  "Mobile Number",
+  "Alternative Number",
+  "Medical Aid Name",
+  "Medical Aid Option / Plan",
+  "Last Visit Total Amount Charged",
+] as const;
+type LeadReadyColumn = typeof leadReadyColumns[number];
+type LeadReadyRow = Record<LeadReadyColumn, string>;
+type ReportRow = Record<string, string | number>;
+
+const cleanupFields: TargetField<CleanupField>[] = [
+  { key: "patient_name", label: "Patient name", aliases: ["patient name", "patient full name", "patient", "name", "member name"] },
+  { key: "account_holder", label: "Account holder", aliases: ["account holder", "main member", "principal member", "responsible person", "holder"] },
+  { key: "account_number", label: "Account number", aliases: ["account number", "account no", "account", "patient number", "file number", "acc no"] },
+  { key: "transaction_date", label: "Transaction / visit date", aliases: ["transaction date", "txn date", "date", "service date", "treatment date", "visit date", "last visit date"] },
+  { key: "treatment_code", label: "Treatment code", aliases: ["treatment code", "code", "tariff code", "procedure code", "item code"] },
+  { key: "treatment_description", label: "Treatment description", aliases: ["treatment description", "description", "procedure description", "item description", "tariff description"] },
+  { key: "cellphone_number", label: "Cellphone / mobile", aliases: ["cellphone", "cellphone number", "mobile", "mobile number", "cell", "contact number"] },
+  { key: "telephone_number", label: "Telephone number", aliases: ["telephone", "telephone number", "tel", "phone", "home phone", "work phone"] },
+  { key: "private_number", label: "Private number", aliases: ["private number", "private phone", "private tel"] },
+  { key: "alternative_number", label: "Alternative number", aliases: ["alternative number", "alternate number", "alt phone", "other number"] },
+  { key: "email", label: "Email", aliases: ["email", "email address", "patient email"] },
+  { key: "medical_aid_name", label: "Medical aid name", aliases: ["medical aid", "medical aid name", "scheme", "scheme name", "medical scheme"] },
+  { key: "medical_aid_option", label: "Medical aid option / plan", aliases: ["medical aid option", "option", "plan", "plan name", "benefit option"] },
+  { key: "branch", label: "Branch", aliases: ["branch", "practice branch", "location", "practice"] },
+  { key: "practitioner", label: "Practitioner", aliases: ["practitioner", "provider", "doctor", "dentist"] },
+  { key: "amount_charged", label: "Amount charged", aliases: ["amount charged", "amount", "charge", "fee", "charged", "value"] },
+];
+
+const leadFields: TargetField<LeadField>[] = [
+  { key: "patient_name", label: "Patient Name", required: true, aliases: ["patient name", "patient full name", "patient", "name"] },
+  { key: "account_number", label: "Account Number", required: true, aliases: ["account number", "account no", "account", "patient number", "file number"] },
+  { key: "last_treatment_date", label: "Last Treatment Date", required: true, aliases: ["last treatment date", "last visit date", "last treatment", "visit date"] },
+  { key: "last_treatment_code", label: "Last Treatment Code", aliases: ["last treatment code", "treatment code", "codes", "last code"] },
+  { key: "last_treatment_description", label: "Last Treatment Description", aliases: ["last treatment description", "treatment description", "description"] },
+  { key: "mobile_number", label: "Mobile Number", aliases: ["mobile number", "cellphone number", "cellphone", "mobile", "primary number"] },
+  { key: "alternative_number", label: "Alternative Number", aliases: ["alternative number", "alternate number", "alt phone", "secondary number"] },
+  { key: "medical_aid_name", label: "Medical Aid Name", aliases: ["medical aid name", "medical aid", "scheme", "scheme name"] },
+  { key: "medical_aid_option", label: "Medical Aid Option / Plan", aliases: ["medical aid option plan", "medical aid option", "option", "plan", "plan name"] },
+  { key: "last_visit_total_amount_charged", label: "Last Visit Total Amount Charged", aliases: ["last visit total amount charged", "total amount", "amount charged", "last visit total", "amount"] },
 ];
 
 export function UploadCentre({ notify }: { notify: (message: string) => void }) {
-  const [step, setStep] = useState(1);
-  const [type, setType] = useState<UploadType>("transactions");
-  const [file, setFile] = useState<{ name: string; size: string; rowCount: number; hash: string | null } | null>(null);
-  const [headers, setHeaders] = useState<string[]>([]);
-  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
-  const [mappings, setMappings] = useState<Partial<Record<SystemField, string>>>({});
-  const [processing, setProcessing] = useState(false);
+  const [activeSection, setActiveSection] = useState<"cleanup" | "upload">("cleanup");
+  const [cleanupDatasets, setCleanupDatasets] = useState<CleanupDataset[]>([]);
+  const [cleanupProcessing, setCleanupProcessing] = useState(false);
+  const [cleanupResult, setCleanupResult] = useState<{
+    leadRows: LeadReadyRow[];
+    exceptionRows: ReportRow[];
+    duplicateRows: ReportRow[];
+    summaryRows: ReportRow[];
+  } | null>(null);
+
+  const [leadFile, setLeadFile] = useState<{ name: string; size: string; rowCount: number; hash: string | null } | null>(null);
+  const [leadHeaders, setLeadHeaders] = useState<string[]>([]);
+  const [leadRows, setLeadRows] = useState<Record<string, unknown>[]>([]);
+  const [leadMappings, setLeadMappings] = useState<Partial<Record<LeadField, string>>>({});
+  const [leadProcessing, setLeadProcessing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -84,7 +155,8 @@ export function UploadCentre({ notify }: { notify: (message: string) => void }) 
   const [error, setError] = useState("");
   const [validationDetails, setValidationDetails] = useState<string[]>([]);
   const [importResult, setImportResult] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
+  const cleanupInputRef = useRef<HTMLInputElement>(null);
+  const leadInputRef = useRef<HTMLInputElement>(null);
 
   async function loadScopeData() {
     if (!isSupabaseConfigured) return;
@@ -104,91 +176,111 @@ export function UploadCentre({ notify }: { notify: (message: string) => void }) 
 
   useEffect(() => { void loadScopeData(); }, []);
 
-  function resetFileState() {
-    setFile(null);
-    setHeaders([]);
-    setRows([]);
-    setMappings({});
+  const companyById = useMemo(() => Object.fromEntries(companies.map((company) => [company.id, company])), [companies]);
+  const branchById = useMemo(() => Object.fromEntries(branches.map((branch) => [branch.id, branch])), [branches]);
+  const scopedBranches = branches.filter((branch) => branch.company_id === companyId);
+  const scopedUploadedLists = uploadedLists.filter((item) => !companyId || item.company_id === companyId);
+  const leadValidation = useMemo(() => validateLeadImportReadiness(companyId, leadFile, leadRows, leadMappings), [companyId, leadFile, leadRows, leadMappings]);
+  const leadWarnings = useMemo(() => leadImportWarnings(leadRows, leadMappings), [leadRows, leadMappings]);
+
+  function resetCleanup() {
+    setCleanupDatasets([]);
+    setCleanupResult(null);
+    setValidationDetails([]);
+    setError("");
+    if (cleanupInputRef.current) cleanupInputRef.current.value = "";
+  }
+
+  function resetLeadUpload() {
+    setLeadFile(null);
+    setLeadHeaders([]);
+    setLeadRows([]);
+    setLeadMappings({});
     setValidationDetails([]);
     setImportResult("");
-    if (inputRef.current) inputRef.current.value = "";
+    setError("");
+    if (leadInputRef.current) leadInputRef.current.value = "";
   }
 
-  function detectMappings(detectedHeaders: string[]) {
-    const normalizedHeaders = detectedHeaders.map((header) => ({ header, normalized: normalizeHeader(header) }));
-    return Object.fromEntries(targetFields.map((field) => {
-      const exact = normalizedHeaders.find((item) => field.aliases.some((alias) => item.normalized === normalizeHeader(alias)));
-      const partial = normalizedHeaders.find((item) => field.aliases.some((alias) => item.normalized.includes(normalizeHeader(alias)) || normalizeHeader(alias).includes(item.normalized)));
-      return [field.key, exact?.header ?? partial?.header ?? ""];
-    })) as Partial<Record<SystemField, string>>;
-  }
-
-  async function readFile(selected: File) {
-    if (!companyId) {
-      notify("Select the company before uploading. Patient lists must be locked to one company.");
-      return;
+  async function readCleanupFiles(files: FileList) {
+    setCleanupProcessing(true);
+    setError("");
+    setCleanupResult(null);
+    try {
+      const datasets: CleanupDataset[] = [];
+      for (const selected of Array.from(files)) {
+        const sheets = await readWorkbook(selected);
+        for (const sheet of sheets) {
+          const headers = (sheet.data[0] ?? []).map((value) => String(value ?? "").trim()).filter(Boolean);
+          if (!headers.length) continue;
+          const rows = sheet.data.slice(1)
+            .filter((row) => row.some((cell) => String(cell ?? "").trim()))
+            .map((row) => Object.fromEntries(headers.map((header, index) => [header, serializableCell(row[index])])));
+          datasets.push({
+            id: `${selected.name}-${sheet.sheet}-${datasets.length}`,
+            fileName: selected.name,
+            sheetName: sheet.sheet,
+            headers,
+            rows,
+            mappings: detectMappings(headers, cleanupFields),
+          });
+        }
+      }
+      setCleanupDatasets(datasets);
+      notify(`${datasets.length.toLocaleString()} sheet(s) loaded for cleanup. Confirm mappings before generating the lead-ready file.`);
+    } catch (readError) {
+      setError(readError instanceof Error ? readError.message : "We could not read one or more cleanup spreadsheets.");
+    } finally {
+      setCleanupProcessing(false);
     }
-    setProcessing(true);
+  }
+
+  async function readLeadReadyFile(selected: File) {
+    setLeadProcessing(true);
     setError("");
     setValidationDetails([]);
     setImportResult("");
     try {
-      let matrix: unknown[][];
-      if (selected.name.toLowerCase().endsWith(".csv")) {
-        const text = await selected.text();
-        matrix = text.split(/\r?\n/).filter(Boolean).map(parseCsvRow);
-      } else {
-        const { readSheet } = await import("read-excel-file/browser");
-        matrix = (await readSheet(selected)) as unknown[][];
-      }
-      const detectedHeaders = (matrix[0] ?? []).map((value) => String(value ?? "").trim()).filter(Boolean);
-      if (!detectedHeaders.length) throw new Error("No header row found.");
-      const parsed = matrix.slice(1)
-        .map((row) => Object.fromEntries(detectedHeaders.map((header, index) => [header, serializableCell(row[index])])));
+      const sheets = await readWorkbook(selected);
+      const firstSheet = sheets[0];
+      if (!firstSheet) throw new Error("No readable sheet found.");
+      const headers = (firstSheet.data[0] ?? []).map((value) => String(value ?? "").trim()).filter(Boolean);
+      if (!headers.length) throw new Error("No header row found.");
+      const parsedRows = firstSheet.data.slice(1)
+        .filter((row) => row.some((cell) => String(cell ?? "").trim()))
+        .map((row) => Object.fromEntries(headers.map((header, index) => [header, serializableCell(row[index])])));
       const hash = await fileHash(selected);
-      const nextMappings = detectMappings(detectedHeaders);
-      setHeaders(detectedHeaders);
-      setRows(parsed);
-      setMappings(nextMappings);
-      setFile({ name: selected.name, size: `${(selected.size / 1024).toFixed(1)} KB`, rowCount: parsed.length, hash });
-      notify(`${parsed.length.toLocaleString()} rows detected and locked to ${companyById[companyId]?.name ?? "selected company"}`);
+      setLeadHeaders(headers);
+      setLeadRows(parsedRows);
+      setLeadMappings(detectMappings(headers, leadFields));
+      setLeadFile({ name: selected.name, size: `${(selected.size / 1024).toFixed(1)} KB`, rowCount: parsedRows.length, hash });
+      notify(`${parsedRows.length.toLocaleString()} lead-ready rows detected. Confirm mappings before import.`);
     } catch (readError) {
-      setError(readError instanceof Error ? readError.message : "We could not read that spreadsheet. Please check the file format.");
+      setError(readError instanceof Error ? readError.message : "We could not read that lead-ready spreadsheet.");
     } finally {
-      setProcessing(false);
+      setLeadProcessing(false);
     }
   }
 
-  function validateImportReadiness() {
-    const issues: string[] = [];
-    if (!companyId) issues.push("Company is required.");
-    if (!file) issues.push("Spreadsheet file is required.");
-    const required = targetFields.filter((field) => field.requiredFor.includes(type));
-    for (const field of required) {
-      if (!mappings[field.key]) issues.push(`${field.label} must be mapped.`);
-    }
-    const selected = Object.values(mappings).filter(Boolean);
-    const duplicates = selected.filter((value, index) => selected.indexOf(value) !== index);
-    if (duplicates.length) issues.push(`One source column cannot be used for multiple fields: ${Array.from(new Set(duplicates)).join(", ")}`);
-    rows.slice(0, 100).forEach((row, index) => {
-      for (const field of required) {
-        const source = mappings[field.key];
-        if (source && !String(row[source] ?? "").trim()) issues.push(`Row ${index + 2}: ${field.label} is blank.`);
-      }
-      if (type === "transactions") {
-        const dateSource = mappings.transaction_date;
-        const codeSource = mappings.treatment_code;
-        if (dateSource && !parseDate(row[dateSource])) issues.push(`Row ${index + 2}: Transaction date is invalid.`);
-        if (codeSource && !String(row[codeSource] ?? "").trim().match(/^\d{3,8}[A-Z]?$/i)) issues.push(`Row ${index + 2}: Treatment code is invalid.`);
-      }
-    });
-    return Array.from(new Set(issues));
+  function updateCleanupMapping(datasetId: string, field: CleanupField, source: string) {
+    setCleanupDatasets((current) => current.map((dataset) => dataset.id === datasetId
+      ? { ...dataset, mappings: { ...dataset.mappings, [field]: source } }
+      : dataset));
   }
 
-  async function importSpreadsheet() {
-    const issues = validateImportReadiness();
-    setValidationDetails(issues.slice(0, 25));
-    if (issues.length) {
+  function generateCleanupOutput() {
+    if (!cleanupDatasets.length) {
+      setError("Upload at least one messy spreadsheet before running cleanup.");
+      return;
+    }
+    const result = cleanupToLeadRows(cleanupDatasets);
+    setCleanupResult(result);
+    notify(`${result.leadRows.length.toLocaleString()} upload-ready lead row(s) generated. Download the lead-ready spreadsheet, then import it under Upload Leads.`);
+  }
+
+  async function importLeadSpreadsheet() {
+    setValidationDetails(leadValidation.slice(0, 30));
+    if (leadValidation.length) {
       setError("Please fix the mapping and row validation issues before importing.");
       return;
     }
@@ -201,26 +293,27 @@ export function UploadCentre({ notify }: { notify: (message: string) => void }) 
       body: JSON.stringify({
         company_id: companyId,
         branch_id: branchId || null,
-        upload_type: type,
-        original_name: file?.name,
-        file_hash: file?.hash,
-        mappings,
-        rows,
+        upload_type: "lead_ready",
+        original_name: leadFile?.name,
+        file_hash: leadFile?.hash,
+        mappings: leadMappings,
+        rows: leadRows,
       }),
     });
     const result = await response.json();
     setImporting(false);
     if (!response.ok) {
-      setError(result.error ?? "Import failed.");
-      const details = result.details as { mappingIssues?: string[]; rejectedRows?: Array<{ row: number; issues: string[] }> } | undefined;
+      setError(result.error ?? "Lead import failed.");
+      const details = result.details as { mappingIssues?: string[]; rejectedRows?: Array<{ row: number; issues: string[] }>; warnings?: Array<{ row: number; issues: string[] }> } | undefined;
       setValidationDetails([
         ...(details?.mappingIssues ?? []),
         ...(details?.rejectedRows ?? []).map((row) => `Row ${row.row}: ${row.issues.join(", ")}`),
-      ].slice(0, 25));
+        ...(details?.warnings ?? []).map((row) => `Warning row ${row.row}: ${row.issues.join(", ")}`),
+      ].slice(0, 30));
       return;
     }
-    setImportResult(result.message ?? "Import completed");
-    notify(result.message ?? "Import completed");
+    setImportResult(result.message ?? "Lead import completed");
+    notify(result.message ?? "Lead import completed");
     await loadScopeData();
   }
 
@@ -249,59 +342,282 @@ export function UploadCentre({ notify }: { notify: (message: string) => void }) 
     await loadScopeData();
   }
 
-  const companyById = useMemo(() => Object.fromEntries(companies.map((company) => [company.id, company])), [companies]);
-  const branchById = useMemo(() => Object.fromEntries(branches.map((branch) => [branch.id, branch])), [branches]);
-  const scopedBranches = branches.filter((branch) => branch.company_id === companyId);
-  const scopedUploadedLists = uploadedLists.filter((item) => !companyId || item.company_id === companyId);
-  const requiredMappedCount = targetFields.filter((field) => field.requiredFor.includes(type) && mappings[field.key]).length;
-  const totalRequired = targetFields.filter((field) => field.requiredFor.includes(type)).length;
-  const optionalMappedCount = targetFields.filter((field) => !field.requiredFor.includes(type) && mappings[field.key]).length;
-  const steps = [[1,"Choose data","Select upload type"],[2,"Upload file","XLSX or CSV"],[3,"Map columns","Confirm detected fields"],[4,"Validate import","Review mapped data"],[5,"Import & generate","Persist records"]];
-
   return <>
-    <div className="page-head"><div><h1>Upload Centre</h1><p>Bring transaction history or a curated contact list into a traceable recall campaign.</p></div><button className="btn btn-secondary" onClick={resetFileState}><RotateCcw size={14} />Reset upload</button></div>
+    <div className="page-head">
+      <div>
+        <h1>Upload Centre</h1>
+        <p>Clean messy practice spreadsheets first, then import only upload-ready patient lead lists.</p>
+      </div>
+      <button className="btn btn-secondary" onClick={activeSection === "cleanup" ? resetCleanup : resetLeadUpload}><RotateCcw size={14} />Reset current section</button>
+    </div>
+
     {error && <div className="callout" style={{ background: "#fbe9ea", color: "#a84850" }}><ShieldAlert size={14}/><span>{error}</span></div>}
-    {validationDetails.length > 0 && <div className="callout" style={{ background: "#fff4ed", color: "#8a5a1f", alignItems: "flex-start" }}><ShieldAlert size={14}/><span><strong>Validation feedback:</strong><br/>{validationDetails.slice(0, 10).map((issue) => <span key={issue} style={{ display: "block", marginTop: 3 }}>{issue}</span>)}</span></div>}
+    {validationDetails.length > 0 && <div className="callout" style={{ background: "#fff4ed", color: "#8a5a1f", alignItems: "flex-start" }}><ShieldAlert size={14}/><span><strong>Validation feedback:</strong><br/>{validationDetails.slice(0, 12).map((issue) => <span key={issue} style={{ display: "block", marginTop: 3 }}>{issue}</span>)}</span></div>}
     {importResult && <div className="callout" style={{ background: "#edf8f4", color: "#2e765f" }}><CheckCircle2 size={14}/><span>{importResult}</span></div>}
 
     <div className="card" style={{ marginBottom: 18 }}>
-      <div className="card-head"><div><div className="card-title">Company isolation boundary</div><div className="card-sub">Every upload is locked to one company before file handling begins.</div></div></div>
-      <div className="card-body form-grid">
-        <div className="form-field"><label>Company *</label><select className="form-control" value={companyId} onChange={(event) => { setCompanyId(event.target.value); setBranchId(""); resetFileState(); }} required><option value="">Select company before upload</option>{companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></div>
-        <div className="form-field"><label>Branch</label><select className="form-control" value={branchId} onChange={(event) => setBranchId(event.target.value)} disabled={!companyId}><option value="">Company-wide / detect from file</option>{scopedBranches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></div>
-        <div className="form-field full"><div className="callout" style={{ margin: 0 }}><Building2 size={14}/><span>Safety rail: branch choices are filtered by company, and the database migration rejects cross-company leads, transactions, imports and assignments.</span></div></div>
+      <div className="card-body" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <button className="lead-card" onClick={() => setActiveSection("cleanup")} style={{ textAlign: "left", borderColor: activeSection === "cleanup" ? "#58aaa2" : undefined, background: activeSection === "cleanup" ? "#f5fbf9" : undefined }}>
+          <div className="drop-icon" style={{ margin: "0 0 14px" }}><Wand2 size={22}/></div>
+          <strong style={{ fontFamily: "Manrope", fontSize: 14 }}>Data Cleanup Tool</strong>
+          <p style={{ fontSize: 10, lineHeight: 1.6, color: "#6f837f" }}>Upload messy transaction, recall, contact or medical aid exports. Clean, merge, analyse and download a lead-ready spreadsheet.</p>
+          <span className="badge high">Does not import to Supabase</span>
+        </button>
+        <button className="lead-card" onClick={() => setActiveSection("upload")} style={{ textAlign: "left", borderColor: activeSection === "upload" ? "#58aaa2" : undefined, background: activeSection === "upload" ? "#f5fbf9" : undefined }}>
+          <div className="drop-icon" style={{ margin: "0 0 14px" }}><FileCheck2 size={22}/></div>
+          <strong style={{ fontFamily: "Manrope", fontSize: 14 }}>Upload Leads</strong>
+          <p style={{ fontSize: 10, lineHeight: 1.6, color: "#6f837f" }}>Import a clean, lead-ready spreadsheet into the selected company and optional branch workflow.</p>
+          <span className="badge premium">Live import area</span>
+        </button>
       </div>
     </div>
 
-    <div className="upload-shell">
-      <div className="card upload-steps">{steps.map(([num,title,sub]) => <div className={`upload-step ${step === num ? "active" : step > Number(num) ? "done" : ""}`} key={title}><div className="step-num">{step > Number(num) ? <Check size={11} /> : num}</div><div><strong>{title}</strong><span>{sub}</span></div></div>)}</div>
-      <div className="card">
-        <div className="card-head"><div><div className="card-title">{step === 1 ? "What would you like to upload?" : step === 2 ? "Add your spreadsheet" : step === 3 ? "Confirm column mapping" : step === 4 ? "Review validation" : "Import and generate recall work"}</div><div className="card-sub">Step {step} of 5 - Source data remains separate from operational leads</div></div></div>
-        <div className="card-body">
-          {step === 1 && <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:13}}>
-            <button onClick={() => { setType("transactions"); resetFileState(); }} className="lead-card" style={{textAlign:"left",borderColor:type === "transactions" ? "#58aaa2" : undefined,background:type === "transactions" ? "#f5fbf9" : undefined}}><div className="drop-icon" style={{margin:"0 0 15px"}}><FileSpreadsheet size={22} /></div><strong style={{fontFamily:"Manrope",fontSize:13}}>Dental transaction spreadsheet</strong><p style={{fontSize:9,lineHeight:1.6,color:"#7e908d"}}>Analyse treatment codes 8101 and 8159, visit dates, medical aid options and patient activity.</p><span className="badge standard">Recommended for recall analysis</span></button>
-            <button onClick={() => { setType("curated_contacts"); resetFileState(); }} className="lead-card" style={{textAlign:"left",borderColor:type === "curated_contacts" ? "#58aaa2" : undefined,background:type === "curated_contacts" ? "#f5fbf9" : undefined}}><div className="drop-icon" style={{margin:"0 0 15px"}}><Sparkles size={22} /></div><strong style={{fontFamily:"Manrope",fontSize:13}}>Curated contact spreadsheet</strong><p style={{fontSize:9,lineHeight:1.6,color:"#7e908d"}}>Import a prepared patient follow-up list with dates, notes, priority and contact details.</p><span className="badge high">Ready follow-up list</span></button>
-          </div>}
-          {step === 2 && <><input ref={inputRef} hidden type="file" accept=".xlsx,.xls,.csv" onChange={(event) => event.target.files?.[0] && readFile(event.target.files[0])} /><div className="dropzone" onClick={() => companyId ? inputRef.current?.click() : notify("Select a company before choosing a spreadsheet.")} style={{ opacity: companyId ? 1 : 0.58 }}><div className="drop-icon">{processing ? <LoaderCircle size={24} className="animate-spin" /> : <UploadCloud size={24} />}</div><h3>{companyId ? "Drop a spreadsheet here, or browse" : "Select a company first"}</h3><p>Supports .XLSX, .XLS and .CSV - maximum 25 MB</p><button className="btn btn-soft" type="button" disabled={!companyId}>Choose spreadsheet</button></div>{file && <div className="file-row"><div className="file-icon"><FileSpreadsheet size={19} /></div><div><strong>{file.name}</strong><span>{file.size} - {file.rowCount.toLocaleString()} rows detected - {companyById[companyId]?.name}</span></div><CheckCircle2 style={{marginLeft:"auto",color:"#3b9b7c"}} size={18} /></div>}<div className="callout" style={{marginTop:14,marginBottom:0}}><Info size={14} /><span>Rows are parsed in the browser, then persisted through a server-side import that creates the upload file, import batch, mappings, patients, contacts, transactions, leads and audit log.</span></div></>}
-          {step === 3 && <><div className="mapping-list">{targetFields.map((field) => <div className="mapping-row" key={field.key}><div className="mapping-source">{field.label}{field.requiredFor.includes(type) ? " *" : ""}</div><ChevronRight className="mapping-arrow" size={14} /><select className="form-control" value={mappings[field.key] ?? ""} onChange={(event) => setMappings((current) => ({ ...current, [field.key]: event.target.value }))}><option value="">Not mapped</option>{headers.map(h=><option key={h} value={h}>{h}</option>)}</select></div>)}</div><div className="mapping-status"><CheckCircle2 size={13} /> Required mapped: {requiredMappedCount} of {totalRequired}. Optional mapped: {optionalMappedCount}. Confirm mappings before import.</div></>}
-          {step === 4 && <><div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:15}}>{[["Rows detected",file?.rowCount.toLocaleString() ?? "0"],["Preview rows",String(Math.min(rows.length, 5))],["Required mapped",`${requiredMappedCount}/${totalRequired}`],["Validation issues",String(validateImportReadiness().length)]].map(item=><div className="metric-card teal" key={item[0]}><div className="metric-label">{item[0]}</div><div className="metric-value" style={{fontSize:20}}>{item[1]}</div></div>)}</div>{rows.length ? <div className="table-wrap" style={{border:"1px solid #e5ecea",borderRadius:12}}><table className="data-table"><thead><tr><th>Patient</th><th>Account</th><th>Contact</th><th>{type === "transactions" ? "Date" : "Last visit"}</th><th>{type === "transactions" ? "Code" : "Priority"}</th><th>Validation</th></tr></thead><tbody>{rows.slice(0,5).map((row,i)=><tr key={i}><td><strong>{valueFor(row, mappings.patient_name) || "Missing"}</strong></td><td>{valueFor(row, mappings.account_number) || "Missing"}</td><td>{valueFor(row, mappings.cellphone_number) || "Not supplied"}</td><td>{valueFor(row, type === "transactions" ? mappings.transaction_date : mappings.last_visit_date) || "Not supplied"}</td><td>{valueFor(row, type === "transactions" ? mappings.treatment_code : mappings.priority) || "Not supplied"}</td><td><span className={`badge ${validateImportReadiness().length ? "missing" : "standard"}`}>{validateImportReadiness().length ? "Review" : "Ready"}</span></td></tr>)}</tbody></table></div> : <div className="card empty-page"><div className="empty-icon"><FileSpreadsheet size={24}/></div><h2>No file rows to preview</h2><p>Upload a spreadsheet before importing patient source data.</p></div>}</>}
-          {step === 5 && <><div className="card" style={{boxShadow:"none"}}><div className="card-body"><Sparkles size={22} color="#0b7a75" /><h3 style={{fontFamily:"Manrope",fontSize:14}}>Ready for production import</h3><p style={{fontSize:9,color:"#758885",lineHeight:1.6}}>This will create an uploaded file record, import batch, confirmed mappings, source records and patient follow-up leads for {companyById[companyId]?.name ?? "the selected company"}.</p><button className="btn btn-primary" style={{marginTop:12}} disabled={importing || !file} onClick={importSpreadsheet}>{importing ? "Importing..." : "Import and generate recall work"}<ArrowRight size={13}/></button></div></div><div className="callout" style={{marginTop:14,marginBottom:0}}><Info size={14}/><span>Traceability: every generated lead is linked to the import batch and uploaded file that created it. The audit log records the import summary.</span></div></>}
-        </div>
-        <div className="modal-actions" style={{borderRadius:"0 0 18px 18px"}}>{step > 1 && <button className="btn btn-secondary" onClick={() => setStep(step - 1)}>Back</button>}<button className="btn btn-primary" disabled={!companyId || ((step === 2 || step === 3 || step === 4) && !file)} onClick={() => { if(step === 4) setValidationDetails(validateImportReadiness().slice(0, 25)); if(step < 5) setStep(step + 1); else void importSpreadsheet(); }}>{step === 5 ? "Import now" : "Continue"}<ArrowRight size={13} /></button></div>
-      </div>
-    </div>
+    {activeSection === "cleanup" ? (
+      <DataCleanupSection
+        datasets={cleanupDatasets}
+        processing={cleanupProcessing}
+        result={cleanupResult}
+        inputRef={cleanupInputRef}
+        onFiles={readCleanupFiles}
+        onMappingChange={updateCleanupMapping}
+        onRun={generateCleanupOutput}
+      />
+    ) : (
+      <UploadLeadsSection
+        companyId={companyId}
+        branchId={branchId}
+        companies={companies}
+        companyById={companyById}
+        branches={scopedBranches}
+        file={leadFile}
+        headers={leadHeaders}
+        rows={leadRows}
+        mappings={leadMappings}
+        validation={leadValidation}
+        warnings={leadWarnings}
+        processing={leadProcessing}
+        importing={importing}
+        inputRef={leadInputRef}
+        onCompanyChange={(nextCompanyId) => { setCompanyId(nextCompanyId); setBranchId(""); resetLeadUpload(); }}
+        onBranchChange={setBranchId}
+        onFile={readLeadReadyFile}
+        onMappingChange={(field, source) => setLeadMappings((current) => ({ ...current, [field]: source }))}
+        onImport={importLeadSpreadsheet}
+      />
+    )}
 
     <div className="card" style={{ marginTop: 18 }}>
-      <div className="card-head"><div><div className="card-title">Recall / withdraw uploaded lists</div><div className="card-sub">Primary Super User only. This removes one selected list and records the reason in the audit log.</div></div></div>
-      <div className="table-wrap"><table className="data-table"><thead><tr><th>List</th><th>Company</th><th>Branch</th><th>Type</th><th>Rows</th><th>Uploaded</th><th>Action</th></tr></thead><tbody>{scopedUploadedLists.map((item) => <tr key={item.id}><td><strong>{item.original_name}</strong></td><td>{companyById[item.company_id]?.name ?? "Unknown"}</td><td>{item.branch_id ? branchById[item.branch_id]?.name ?? "Unknown" : "Company-wide"}</td><td>{item.upload_type}</td><td>{item.row_count ?? "-"}</td><td>{new Date(item.created_at).toLocaleDateString()}</td><td><button className="btn btn-danger-soft" onClick={() => setListToRecall(item)}><Trash2 size={12}/>Recall list</button></td></tr>)}</tbody></table>{!scopedUploadedLists.length && <div className="empty-page" style={{ boxShadow: "none" }}><div className="empty-icon"><FileSpreadsheet size={25}/></div><h2>No uploaded lists found</h2><p>Persisted live imports will appear here for controlled recall/withdrawal.</p></div>}</div>
+      <div className="card-head"><div><div className="card-title">Recall / withdraw uploaded lists</div><div className="card-sub">Primary Super User only. This removes one selected imported list and records the reason in the audit log.</div></div></div>
+      <div className="table-wrap">
+        <table className="data-table"><thead><tr><th>List</th><th>Company</th><th>Branch</th><th>Type</th><th>Rows</th><th>Uploaded</th><th>Action</th></tr></thead><tbody>{scopedUploadedLists.map((item) => <tr key={item.id}><td><strong>{item.original_name}</strong></td><td>{companyById[item.company_id]?.name ?? "Unknown"}</td><td>{item.branch_id ? branchById[item.branch_id]?.name ?? "Unknown" : "Company-wide"}</td><td>{item.upload_type}</td><td>{item.row_count ?? "-"}</td><td>{new Date(item.created_at).toLocaleDateString()}</td><td><button className="btn btn-danger-soft" onClick={() => setListToRecall(item)}><Trash2 size={12}/>Recall list</button></td></tr>)}</tbody></table>
+        {!scopedUploadedLists.length && <div className="empty-page" style={{ boxShadow: "none" }}><div className="empty-icon"><FileSpreadsheet size={25}/></div><h2>No uploaded lists found</h2><p>Persisted live imports will appear here for controlled recall/withdrawal.</p></div>}
+      </div>
     </div>
 
-    {listToRecall && <div className="modal-backdrop" onClick={() => setListToRecall(null)}><div className="modal" onClick={(event) => event.stopPropagation()}><div className="modal-head"><strong>Recall uploaded list</strong><button className="icon-btn" onClick={() => setListToRecall(null)}>x</button></div><div className="modal-body"><div className="callout" style={{ background: "#fff4ed" }}><ShieldAlert size={14}/><span>This is destructive and primary-Super-User-only. It removes records created from this list only; audit history remains.</span></div><p style={{ fontSize: 11, color: "#657875", lineHeight: 1.6 }}><strong>{listToRecall.original_name}</strong><br/>{companyById[listToRecall.company_id]?.name ?? "Unknown company"} - {listToRecall.row_count ?? 0} rows</p><div className="form-field"><label>Reason for recall *</label><textarea className="form-control" value={recallReason} onChange={(event) => setRecallReason(event.target.value)} placeholder="Example: Wrong company list uploaded in error"/></div></div><div className="modal-actions"><button className="btn btn-secondary" onClick={() => setListToRecall(null)}>Cancel</button><button className="btn btn-danger-soft" disabled={recalling || recallReason.trim().length < 8} onClick={recallUploadedList}>{recalling ? "Recalling..." : "Confirm recall"}</button></div></div></div>}
+    {listToRecall && <div className="modal-backdrop" onClick={() => setListToRecall(null)}><div className="modal" onClick={(event) => event.stopPropagation()}><div className="modal-head"><strong>Recall uploaded list</strong><button className="icon-btn" onClick={() => setListToRecall(null)}>x</button></div><div className="modal-body"><div className="callout" style={{ background: "#fff4ed" }}><ShieldAlert size={14}/><span>This is destructive and primary-Super-User-only. It removes records created from this imported list only; audit history remains.</span></div><p style={{ fontSize: 11, color: "#657875", lineHeight: 1.6 }}><strong>{listToRecall.original_name}</strong><br/>{companyById[listToRecall.company_id]?.name ?? "Unknown company"} - {listToRecall.row_count ?? 0} rows</p><div className="form-field"><label>Reason for recall *</label><textarea className="form-control" value={recallReason} onChange={(event) => setRecallReason(event.target.value)} placeholder="Example: Wrong company list uploaded in error"/></div></div><div className="modal-actions"><button className="btn btn-secondary" onClick={() => setListToRecall(null)}>Cancel</button><button className="btn btn-danger-soft" disabled={recalling || recallReason.trim().length < 8} onClick={recallUploadedList}>{recalling ? "Recalling..." : "Confirm recall"}</button></div></div></div>}
   </>;
+}
+
+function DataCleanupSection({
+  datasets,
+  processing,
+  result,
+  inputRef,
+  onFiles,
+  onMappingChange,
+  onRun,
+}: {
+  datasets: CleanupDataset[];
+  processing: boolean;
+  result: { leadRows: LeadReadyRow[]; exceptionRows: ReportRow[]; duplicateRows: ReportRow[]; summaryRows: ReportRow[] } | null;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  onFiles: (files: FileList) => void;
+  onMappingChange: (datasetId: string, field: CleanupField, source: string) => void;
+  onRun: () => void;
+}) {
+  const totalRows = datasets.reduce((sum, dataset) => sum + dataset.rows.length, 0);
+  return <div className="card">
+    <div className="card-head"><div><div className="card-title">Data Cleanup Tool</div><div className="card-sub">Prepare messy files into one clean Upload-Ready Lead Spreadsheet. This section does not write to the live database.</div></div></div>
+    <div className="card-body">
+      <input ref={inputRef} hidden multiple type="file" accept=".xlsx,.xls,.csv" onChange={(event) => event.target.files && onFiles(event.target.files)} />
+      <div className="dropzone" onClick={() => inputRef.current?.click()}>
+        <div className="drop-icon">{processing ? <LoaderCircle size={24} className="animate-spin" /> : <UploadCloud size={24} />}</div>
+        <h3>Upload messy practice spreadsheets</h3>
+        <p>Supports multiple files, multiple workbook sheets, transaction lists, contact lists, recall exports and medical aid exports.</p>
+        <button className="btn btn-soft" type="button">Choose cleanup files</button>
+      </div>
+
+      {datasets.length > 0 && <>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginTop: 16 }}>
+          <Metric label="Sheets loaded" value={datasets.length.toLocaleString()} />
+          <Metric label="Rows detected" value={totalRows.toLocaleString()} />
+          <Metric label="Mapped patient fields" value={String(datasets.filter((dataset) => dataset.mappings.patient_name || dataset.mappings.account_holder).length)} />
+          <Metric label="Mapped date fields" value={String(datasets.filter((dataset) => dataset.mappings.transaction_date).length)} />
+        </div>
+
+        <div className="callout" style={{ marginTop: 14 }}>
+          <Info size={14}/><span>Repeated transaction line items are preserved during analysis. True duplicate rows are removed only when the mapped row values are identical.</span>
+        </div>
+
+        <div style={{ display: "grid", gap: 14, marginTop: 14 }}>
+          {datasets.map((dataset) => (
+            <div className="lead-card" key={dataset.id}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                <div><strong style={{ fontFamily: "Manrope", fontSize: 13 }}>{dataset.fileName}</strong><p style={{ fontSize: 10, color: "#738582", marginTop: 4 }}>{dataset.sheetName} - {dataset.rows.length.toLocaleString()} rows</p></div>
+                <span className="badge standard">{dataset.headers.length} columns</span>
+              </div>
+              <div className="mapping-list" style={{ marginTop: 12 }}>
+                {cleanupFields.map((field) => <div className="mapping-row" key={field.key}><div className="mapping-source">{field.label}</div><ChevronRight className="mapping-arrow" size={14}/><select className="form-control" value={dataset.mappings[field.key] ?? ""} onChange={(event) => onMappingChange(dataset.id, field.key, event.target.value)}><option value="">Not mapped</option>{dataset.headers.map((header) => <option key={header} value={header}>{header}</option>)}</select></div>)}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="modal-actions" style={{ borderRadius: 14, marginTop: 16 }}>
+          <button className="btn btn-primary" onClick={onRun}><Wand2 size={14}/>Generate upload-ready spreadsheet</button>
+        </div>
+      </>}
+
+      {result && <div className="card" style={{ marginTop: 16, boxShadow: "none", border: "1px solid #e5ecea" }}>
+        <div className="card-head"><div><div className="card-title">Cleanup output</div><div className="card-sub">Download the lead-ready file for Upload Leads. Reports are for review only and should not be imported as lead data.</div></div></div>
+        <div className="card-body">
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
+            <Metric label="Lead rows produced" value={result.leadRows.length.toLocaleString()} />
+            <Metric label="Exceptions" value={result.exceptionRows.length.toLocaleString()} />
+            <Metric label="Duplicates removed" value={result.duplicateRows.length.toLocaleString()} />
+            <Metric label="Summary rows" value={result.summaryRows.length.toLocaleString()} />
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+            <button className="btn btn-primary" onClick={() => downloadCsv("Upload-Ready Lead Spreadsheet.csv", result.leadRows, leadReadyColumns)}><Download size={14}/>Upload-Ready Lead Spreadsheet</button>
+            <button className="btn btn-secondary" onClick={() => downloadCsv("Exception Report.csv", result.exceptionRows)}><Download size={14}/>Exception Report</button>
+            <button className="btn btn-secondary" onClick={() => downloadCsv("Duplicate Report.csv", result.duplicateRows)}><Download size={14}/>Duplicate Report</button>
+            <button className="btn btn-secondary" onClick={() => downloadCsv("Cleanup Summary Report.csv", result.summaryRows)}><Download size={14}/>Cleanup Summary Report</button>
+          </div>
+        </div>
+      </div>}
+    </div>
+  </div>;
+}
+
+function UploadLeadsSection({
+  companyId,
+  branchId,
+  companies,
+  companyById,
+  branches,
+  file,
+  headers,
+  rows,
+  mappings,
+  validation,
+  warnings,
+  processing,
+  importing,
+  inputRef,
+  onCompanyChange,
+  onBranchChange,
+  onFile,
+  onMappingChange,
+  onImport,
+}: {
+  companyId: string;
+  branchId: string;
+  companies: Company[];
+  companyById: Record<string, Company>;
+  branches: Branch[];
+  file: { name: string; size: string; rowCount: number; hash: string | null } | null;
+  headers: string[];
+  rows: Record<string, unknown>[];
+  mappings: Partial<Record<LeadField, string>>;
+  validation: string[];
+  warnings: string[];
+  processing: boolean;
+  importing: boolean;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  onCompanyChange: (companyId: string) => void;
+  onBranchChange: (branchId: string) => void;
+  onFile: (file: File) => void;
+  onMappingChange: (field: LeadField, source: string) => void;
+  onImport: () => void;
+}) {
+  const requiredMapped = leadFields.filter((field) => field.required && mappings[field.key]).length;
+  const totalRequired = leadFields.filter((field) => field.required).length;
+
+  return <div className="card">
+    <div className="card-head"><div><div className="card-title">Upload Leads</div><div className="card-sub">Only clean lead-ready spreadsheets are accepted here. Company and branch are selected outside the spreadsheet.</div></div></div>
+    <div className="card-body">
+      <div className="form-grid">
+        <div className="form-field"><label>Company *</label><select className="form-control" value={companyId} onChange={(event) => onCompanyChange(event.target.value)} required><option value="">Select company before upload</option>{companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></div>
+        <div className="form-field"><label>Branch</label><select className="form-control" value={branchId} onChange={(event) => onBranchChange(event.target.value)} disabled={!companyId}><option value="">Company-wide list</option>{branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></div>
+        <div className="form-field full"><div className="callout" style={{ margin: 0 }}><Building2 size={14}/><span>Safety rail: the selected company applies to the whole upload. Spreadsheet branch columns are ignored for live import and cannot move patients into another company.</span></div></div>
+      </div>
+
+      <input ref={inputRef} hidden type="file" accept=".xlsx,.xls,.csv" onChange={(event) => event.target.files?.[0] && onFile(event.target.files[0])} />
+      <div className="dropzone" onClick={() => companyId ? inputRef.current?.click() : undefined} style={{ opacity: companyId ? 1 : 0.58, marginTop: 16 }}>
+        <div className="drop-icon">{processing ? <LoaderCircle size={24} className="animate-spin" /> : <UploadCloud size={24} />}</div>
+        <h3>{companyId ? "Upload a clean lead-ready spreadsheet" : "Select a company first"}</h3>
+        <p>Required columns: Patient Name, Account Number, Last Treatment Date. Mobile number is recommended but not blocking.</p>
+        <button className="btn btn-soft" type="button" disabled={!companyId}>Choose lead-ready spreadsheet</button>
+      </div>
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
+        <button className="btn btn-secondary" onClick={() => downloadCsv("Upload Leads Template.csv", [emptyLeadReadyRow()], leadReadyColumns)}><Download size={14}/>Download template</button>
+        <span className="badge standard">Selected scope: {companyById[companyId]?.name ?? "No company selected"}</span>
+      </div>
+
+      {file && <div className="file-row"><div className="file-icon"><FileSpreadsheet size={19}/></div><div><strong>{file.name}</strong><span>{file.size} - {file.rowCount.toLocaleString()} rows detected - {companyById[companyId]?.name}</span></div><CheckCircle2 style={{ marginLeft: "auto", color: "#3b9b7c" }} size={18}/></div>}
+
+      {headers.length > 0 && <div className="lead-card" style={{ marginTop: 14 }}>
+        <strong style={{ fontFamily: "Manrope", fontSize: 13 }}>Confirm lead column mapping</strong>
+        <div className="mapping-list" style={{ marginTop: 12 }}>
+          {leadFields.map((field) => <div className="mapping-row" key={field.key}><div className="mapping-source">{field.label}{field.required ? " *" : ""}</div><ChevronRight className="mapping-arrow" size={14}/><select className="form-control" value={mappings[field.key] ?? ""} onChange={(event) => onMappingChange(field.key, event.target.value)}><option value="">Not mapped</option>{headers.map((header) => <option key={header} value={header}>{header}</option>)}</select></div>)}
+        </div>
+        <div className="mapping-status"><CheckCircle2 size={13}/> Required mapped: {requiredMapped} of {totalRequired}. One source column cannot be reused for multiple target fields.</div>
+      </div>}
+
+      {warnings.length > 0 && <div className="callout" style={{ background: "#fff8e6", color: "#80611c", marginTop: 14, alignItems: "flex-start" }}><AlertTriangle size={14}/><span><strong>Non-blocking warnings:</strong><br/>{warnings.slice(0, 8).map((warning) => <span key={warning} style={{ display: "block", marginTop: 3 }}>{warning}</span>)}</span></div>}
+
+      {rows.length > 0 && <div className="table-wrap" style={{ border: "1px solid #e5ecea", borderRadius: 12, marginTop: 14 }}>
+        <table className="data-table"><thead><tr><th>Patient</th><th>Account</th><th>Last treatment date</th><th>Codes</th><th>Mobile</th><th>Status</th></tr></thead><tbody>{rows.slice(0, 6).map((row, index) => {
+          const lastDate = parseDate(valueFor(row, mappings.last_treatment_date));
+          const due = lastDate ? isSixMonthRecallDue(lastDate) : false;
+          return <tr key={index}><td><strong>{valueFor(row, mappings.patient_name) || "Missing"}</strong></td><td>{valueFor(row, mappings.account_number) || "Missing"}</td><td>{lastDate || "Invalid / missing"}</td><td>{valueFor(row, mappings.last_treatment_code) || "Not supplied"}</td><td>{valueFor(row, mappings.mobile_number) || "Missing"}</td><td><span className={`badge ${validation.length ? "missing" : due ? "high" : "standard"}`}>{validation.length ? "Review" : due ? "Six-month due" : "Not yet due"}</span></td></tr>;
+        })}</tbody></table>
+      </div>}
+
+      <div className="modal-actions" style={{ borderRadius: 14, marginTop: 16 }}>
+        <button className="btn btn-primary" disabled={importing || !file || validation.length > 0} onClick={onImport}>{importing ? "Importing..." : "Import lead-ready list"}<ArrowRight size={13}/></button>
+      </div>
+    </div>
+  </div>;
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return <div className="metric-card teal"><div className="metric-label">{label}</div><div className="metric-value" style={{ fontSize: 20 }}>{value}</div></div>;
 }
 
 function normalizeHeader(value: string) {
   return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ");
+}
+
+function detectMappings<T extends string>(headers: string[], fields: TargetField<T>[]) {
+  const normalizedHeaders = headers.map((header) => ({ header, normalized: normalizeHeader(header) }));
+  return Object.fromEntries(fields.map((field) => {
+    const aliases = field.aliases.map(normalizeHeader);
+    const exact = normalizedHeaders.find((item) => aliases.some((alias) => item.normalized === alias));
+    const partial = normalizedHeaders.find((item) => aliases.some((alias) => item.normalized.includes(alias) || alias.includes(item.normalized)));
+    return [field.key, exact?.header ?? partial?.header ?? ""];
+  })) as Partial<Record<T, string>>;
+}
+
+async function readWorkbook(file: File): Promise<Array<{ sheet: string; data: unknown[][] }>> {
+  if (file.name.toLowerCase().endsWith(".csv")) {
+    const text = await file.text();
+    return [{ sheet: "CSV", data: text.split(/\r?\n/).filter(Boolean).map(parseCsvRow) }];
+  }
+  const readXlsxFile = (await import("read-excel-file/browser")).default;
+  const sheets = await readXlsxFile(file) as Array<{ sheet: string; data: unknown[][] }>;
+  return sheets.filter((sheet) => sheet.data?.length);
 }
 
 function serializableCell(value: unknown) {
@@ -309,20 +625,275 @@ function serializableCell(value: unknown) {
   return value ?? "";
 }
 
-function valueFor(row: Record<string, unknown>, header?: string) {
+function valueFor<T extends string>(row: Record<string, unknown>, header?: string) {
   return header ? String(row[header] ?? "").trim() : "";
+}
+
+function cleanupValue(row: Record<string, unknown>, mappings: Partial<Record<CleanupField, string>>, field: CleanupField) {
+  return valueFor(row, mappings[field]);
 }
 
 function parseDate(value: unknown) {
   if (!value) return null;
-  const parsed = new Date(String(value));
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const parsed = new Date(raw);
   if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
-  const match = String(value).trim().match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
+  const match = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
   if (!match) return null;
   const [, day, month, year] = match;
   const fullYear = Number(year.length === 2 ? `20${year}` : year);
   const date = new Date(Date.UTC(fullYear, Number(month) - 1, Number(day)));
   return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
+}
+
+function parseAmount(value: unknown) {
+  const cleaned = String(value ?? "").replace(/[^\d.-]/g, "");
+  if (!cleaned) return 0;
+  const amount = Number(cleaned);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function cleanPhone(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  let digits = raw.replace(/\D/g, "");
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  if (digits.startsWith("27") && digits.length === 11) return `+${digits}`;
+  if (digits.startsWith("0") && digits.length === 10) return `+27${digits.slice(1)}`;
+  if (digits.length === 9) return `+27${digits}`;
+  if (digits.length >= 10 && digits.length <= 15) return `+${digits}`;
+  return "";
+}
+
+function isMobileLooking(value: string) {
+  return /^\+27[678]/.test(value);
+}
+
+function addMonths(date: Date, months: number) {
+  const next = new Date(date);
+  next.setMonth(next.getMonth() + months);
+  return next;
+}
+
+function isSixMonthRecallDue(lastTreatmentDate: string) {
+  return lastTreatmentDate <= addMonths(new Date(), -6).toISOString().slice(0, 10);
+}
+
+function cleanupToLeadRows(datasets: CleanupDataset[]) {
+  const exceptionRows: ReportRow[] = [];
+  const duplicateRows: ReportRow[] = [];
+  const groups = new Map<string, Array<{
+    source: string;
+    rowNumber: number;
+    patientName: string;
+    accountHolder: string;
+    accountNumber: string;
+    date: string | null;
+    treatmentCode: string;
+    treatmentDescription: string;
+    amount: number;
+    contacts: string[];
+    medicalAidName: string;
+    medicalAidOption: string;
+  }>>();
+  const signatures = new Map<string, string>();
+  let totalRows = 0;
+  let transactionRowsAnalysed = 0;
+
+  for (const dataset of datasets) {
+    dataset.rows.forEach((row, index) => {
+      totalRows += 1;
+      const source = `${dataset.fileName} / ${dataset.sheetName}`;
+      const rowNumber = index + 2;
+      const values = Object.fromEntries(cleanupFields.map((field) => [field.key, cleanupValue(row, dataset.mappings, field.key)])) as Record<CleanupField, string>;
+      const signature = JSON.stringify(values);
+      const existingSignature = signatures.get(signature);
+      if (existingSignature) {
+        duplicateRows.push({ Source: source, Row: rowNumber, "Duplicate Of": existingSignature, Reason: "Mapped row values are identical" });
+        return;
+      }
+      signatures.set(signature, `${source} row ${rowNumber}`);
+
+      const patientName = values.patient_name || values.account_holder;
+      const accountHolder = values.account_holder;
+      const accountNumber = values.account_number;
+      const date = parseDate(values.transaction_date);
+      const treatmentCode = values.treatment_code.toUpperCase();
+      const treatmentDescription = values.treatment_description;
+      const amount = parseAmount(values.amount_charged);
+      const contacts = [values.cellphone_number, values.telephone_number, values.private_number, values.alternative_number].map(cleanPhone).filter(Boolean);
+      const issues: string[] = [];
+
+      if (!patientName) issues.push("Missing patient name");
+      if (!accountNumber) issues.push("Missing account number");
+      if (!contacts.length) issues.push("Missing contact number");
+      if (values.transaction_date && !date) issues.push("Invalid date");
+      if (treatmentCode && !/^[A-Z0-9 ._-]+$/i.test(treatmentCode)) issues.push("Invalid treatment code");
+      if (!values.patient_name && values.account_holder) issues.push("Patient name filled from account holder");
+      if (!accountNumber && patientName) issues.push("Low-confidence match; account number is required for upload-ready output");
+      if (issues.length) exceptionRows.push({ Source: source, Row: rowNumber, "Patient Name": patientName || "", "Account Number": accountNumber || "", Reason: issues.join("; ") });
+
+      if (!patientName || !accountNumber) return;
+      if (date || treatmentCode || treatmentDescription || amount) transactionRowsAnalysed += 1;
+
+      const groupKey = `account:${normalizeKey(accountNumber)}`;
+      const current = groups.get(groupKey) ?? [];
+      current.push({
+        source,
+        rowNumber,
+        patientName,
+        accountHolder,
+        accountNumber,
+        date,
+        treatmentCode,
+        treatmentDescription,
+        amount,
+        contacts,
+        medicalAidName: values.medical_aid_name,
+        medicalAidOption: values.medical_aid_option,
+      });
+      groups.set(groupKey, current);
+    });
+  }
+
+  const leadRows: LeadReadyRow[] = [];
+  let matchedContactRecords = 0;
+  let unmatchedRecords = 0;
+  let missingContactRecords = 0;
+
+  for (const rows of groups.values()) {
+    const first = rows[0];
+    const names = Array.from(new Set(rows.map((row) => normalizeKey(row.patientName)).filter(Boolean)));
+    if (names.length > 1) {
+      exceptionRows.push({ Source: "Merged patient group", Row: first.rowNumber, "Patient Name": rows.map((row) => row.patientName).join(" | "), "Account Number": first.accountNumber, Reason: "Conflicting patient names share the same account number; review before trusting merged output" });
+    }
+
+    const datedRows = rows.filter((row) => row.date);
+    if (!datedRows.length) {
+      unmatchedRecords += rows.length;
+      exceptionRows.push({ Source: "Merged patient group", Row: first.rowNumber, "Patient Name": first.patientName, "Account Number": first.accountNumber, Reason: "No valid treatment or visit date found; row excluded from upload-ready output" });
+      continue;
+    }
+    const lastDate = datedRows.map((row) => row.date).sort().at(-1)!;
+    const lastDateRows = rows.filter((row) => row.date === lastDate);
+    const codes = Array.from(new Set(lastDateRows.map((row) => row.treatmentCode).filter(Boolean))).join(", ");
+    const descriptions = Array.from(new Set(lastDateRows.map((row) => row.treatmentDescription).filter(Boolean))).join("; ");
+    const total = lastDateRows.reduce((sum, row) => sum + row.amount, 0);
+    const allContacts = Array.from(new Set(rows.flatMap((row) => row.contacts))).filter(Boolean);
+    const mobile = allContacts.find(isMobileLooking) ?? allContacts[0] ?? "";
+    const alternative = allContacts.filter((contact) => contact !== mobile)[0] ?? "";
+    if (mobile || alternative) matchedContactRecords += 1;
+    else missingContactRecords += 1;
+
+    const medicalAidName = rows.find((row) => row.medicalAidName)?.medicalAidName ?? "";
+    const medicalAidOption = rows.find((row) => row.medicalAidOption)?.medicalAidOption ?? "";
+    leadRows.push({
+      "Patient Name": first.patientName,
+      "Account Number": first.accountNumber,
+      "Last Treatment Date": lastDate,
+      "Last Treatment Code": codes,
+      "Last Treatment Description": descriptions,
+      "Mobile Number": mobile,
+      "Alternative Number": alternative,
+      "Medical Aid Name": medicalAidName,
+      "Medical Aid Option / Plan": medicalAidOption,
+      "Last Visit Total Amount Charged": total ? total.toFixed(2) : "",
+    });
+  }
+
+  const summaryRows: ReportRow[] = [
+    { Metric: "Total uploaded rows", Value: totalRows },
+    { Metric: "Total unique patients/leads produced", Value: leadRows.length },
+    { Metric: "Total transaction rows analysed", Value: transactionRowsAnalysed },
+    { Metric: "Total duplicate rows removed", Value: duplicateRows.length },
+    { Metric: "Total matched contact records", Value: matchedContactRecords },
+    { Metric: "Total unmatched records", Value: unmatchedRecords },
+    { Metric: "Total records missing contact numbers", Value: missingContactRecords },
+    { Metric: "Total records requiring manual review", Value: exceptionRows.length },
+  ];
+
+  return { leadRows, exceptionRows, duplicateRows, summaryRows };
+}
+
+function validateLeadImportReadiness(companyId: string, file: { name: string } | null, rows: Record<string, unknown>[], mappings: Partial<Record<LeadField, string>>) {
+  const issues: string[] = [];
+  if (!companyId) issues.push("Company is required.");
+  if (!file) issues.push("Lead-ready spreadsheet is required.");
+  const headers = Object.keys(rows[0] ?? {});
+  const headerSet = new Set(headers);
+  for (const field of leadFields.filter((item) => item.required)) {
+    if (!mappings[field.key]) issues.push(`${field.label} must be mapped.`);
+  }
+  for (const [field, source] of Object.entries(mappings)) {
+    if (source && !headerSet.has(source)) issues.push(`${field} is mapped to a column that does not exist: ${source}`);
+  }
+  const selected = Object.values(mappings).filter(Boolean);
+  const duplicates = selected.filter((value, index) => selected.indexOf(value) !== index);
+  if (duplicates.length) issues.push(`One source column cannot be used for multiple fields: ${Array.from(new Set(duplicates)).join(", ")}`);
+  rows.slice(0, 500).forEach((row, index) => {
+    const rowNumber = index + 2;
+    if (!valueFor(row, mappings.patient_name)) issues.push(`Row ${rowNumber}: Patient Name is blank.`);
+    if (!valueFor(row, mappings.account_number)) issues.push(`Row ${rowNumber}: Account Number is blank.`);
+    const lastDate = valueFor(row, mappings.last_treatment_date);
+    if (!lastDate || !parseDate(lastDate)) issues.push(`Row ${rowNumber}: Last Treatment Date is invalid or blank.`);
+    const mobile = valueFor(row, mappings.mobile_number);
+    if (mobile && !cleanPhone(mobile)) issues.push(`Row ${rowNumber}: Mobile Number format is invalid.`);
+    const amount = valueFor(row, mappings.last_visit_total_amount_charged);
+    if (amount && Number.isNaN(Number(amount.replace(/[^\d.-]/g, "")))) issues.push(`Row ${rowNumber}: Last Visit Total Amount Charged must be numeric.`);
+  });
+  return Array.from(new Set(issues));
+}
+
+function leadImportWarnings(rows: Record<string, unknown>[], mappings: Partial<Record<LeadField, string>>) {
+  const warnings: string[] = [];
+  const recommended = leadFields.filter((field) => !field.required);
+  for (const field of recommended) {
+    if (!mappings[field.key]) warnings.push(`${field.label} is recommended but not mapped.`);
+  }
+  rows.slice(0, 100).forEach((row, index) => {
+    if (!valueFor(row, mappings.mobile_number)) warnings.push(`Row ${index + 2}: Mobile Number is missing. Import is allowed, but the lead should be reviewed.`);
+  });
+  return Array.from(new Set(warnings));
+}
+
+function normalizeKey(value: unknown) {
+  return String(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function emptyLeadReadyRow(): LeadReadyRow {
+  return {
+    "Patient Name": "",
+    "Account Number": "",
+    "Last Treatment Date": "",
+    "Last Treatment Code": "",
+    "Last Treatment Description": "",
+    "Mobile Number": "",
+    "Alternative Number": "",
+    "Medical Aid Name": "",
+    "Medical Aid Option / Plan": "",
+    "Last Visit Total Amount Charged": "",
+  };
+}
+
+function downloadCsv(fileName: string, rows: Record<string, unknown>[], preferredColumns?: readonly string[]) {
+  const columns = preferredColumns?.length ? [...preferredColumns] : Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
+  const body = [columns, ...rows.map((row) => columns.map((column) => row[column] ?? ""))]
+    .map((line) => line.map(csvCell).join(","))
+    .join("\n");
+  const blob = new Blob([body], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function csvCell(value: unknown) {
+  const text = String(value ?? "");
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
 async function fileHash(file: File) {
