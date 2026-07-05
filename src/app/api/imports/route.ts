@@ -1,6 +1,8 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
+
+export const maxDuration = 300;
 
 type UploadType = "lead_ready";
 type SystemField =
@@ -23,6 +25,31 @@ type ImportPayload = {
   file_hash?: string | null;
   mappings: Partial<Record<SystemField, string>>;
   rows: Record<string, unknown>[];
+};
+type ImportProgressRow = {
+  id: string;
+  status: string;
+  imported_rows: number | null;
+  rejected_rows: number | null;
+  completed_at: string | null;
+  created_at: string;
+  uploaded_files: Array<{
+    id: string;
+    company_id: string;
+    branch_id: string | null;
+    upload_type: string;
+    original_name: string;
+    row_count: number | null;
+    created_at: string;
+  }> | {
+    id: string;
+    company_id: string;
+    branch_id: string | null;
+    upload_type: string;
+    original_name: string;
+    row_count: number | null;
+    created_at: string;
+  } | null;
 };
 
 type AdminClient = ReturnType<typeof createClient<any, "public", any>>;
@@ -275,6 +302,7 @@ async function importLeadRows(
   payload: ImportPayload,
   uploadedFileId: string,
   importBatchId: string,
+  onProgress?: (importedRows: number) => Promise<void>,
 ) {
   let importedRows = 0;
   let createdLeads = 0;
@@ -354,9 +382,140 @@ async function importLeadRows(
       createdLeads += 1;
     }
     importedRows += 1;
+    if (importedRows % 25 === 0) await onProgress?.(importedRows);
   }
 
+  await onProgress?.(importedRows);
   return { importedRows, createdLeads, updatedLeads, generatedLeads: createdLeads + updatedLeads };
+}
+
+async function hasActiveImport(admin: AdminClient, companyId: string) {
+  const recentCutoff = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+  const { data, error } = await admin
+    .from("import_batches")
+    .select("id,created_at,uploaded_files!inner(company_id,original_name,row_count)")
+    .eq("status", "importing")
+    .gte("created_at", recentCutoff)
+    .eq("uploaded_files.company_id", companyId)
+    .limit(1);
+  if (error) throw new Error(error.message);
+  return data?.[0] ?? null;
+}
+
+async function processImportBatch(
+  admin: AdminClient,
+  actorId: string,
+  payload: ImportPayload,
+  uploadedFileId: string,
+  importBatchId: string,
+  warningCount: number,
+) {
+  try {
+    const result = await importLeadRows(admin, actorId, payload, uploadedFileId, importBatchId, async (importedRows) => {
+      await admin.from("import_batches").update({ imported_rows: importedRows }).eq("id", importBatchId);
+    });
+
+    const { error: completeError } = await admin.from("import_batches").update({
+      status: "completed",
+      imported_rows: result.importedRows,
+      rejected_rows: payload.rows.length - result.importedRows,
+      completed_at: new Date().toISOString(),
+    }).eq("id", importBatchId);
+    if (completeError) throw new Error(completeError.message);
+
+    await safeAudit(admin, {
+      company_id: payload.company_id,
+      actor_id: actorId,
+      entity_type: "import_batch",
+      entity_id: importBatchId,
+      action: "imported_lead_ready_list",
+      after_data: {
+        uploaded_file_id: uploadedFileId,
+        original_name: payload.original_name,
+        upload_type: payload.upload_type,
+        row_count: payload.rows.length,
+        imported_rows: result.importedRows,
+        created_leads: result.createdLeads,
+        updated_leads: result.updatedLeads,
+        warning_rows: warningCount,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Import processing failed.";
+    await admin.from("import_batches").update({
+      status: "failed",
+      rejected_rows: payload.rows.length,
+      completed_at: new Date().toISOString(),
+      source_metadata: {
+        upload_type: payload.upload_type,
+        file_hash: payload.file_hash || null,
+        error: message,
+      },
+    }).eq("id", importBatchId);
+    await safeAudit(admin, {
+      company_id: payload.company_id,
+      actor_id: actorId,
+      entity_type: "import_batch",
+      entity_id: importBatchId,
+      action: "lead_ready_import_failed",
+      after_data: { uploaded_file_id: uploadedFileId, original_name: payload.original_name, error: message },
+    });
+  }
+}
+
+function progressPercent(importedRows: number, rowCount: number) {
+  if (!rowCount) return 0;
+  return Math.min(100, Math.round((importedRows / rowCount) * 100));
+}
+
+export async function GET(request: NextRequest) {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !anonKey) return jsonError("Supabase public environment variables are not configured.", 500);
+  if (!serviceRoleKey) return jsonError("SUPABASE_SERVICE_ROLE_KEY is required for production imports.", 500);
+
+  try {
+    const { admin } = await getActor(request, supabaseUrl, anonKey, serviceRoleKey);
+    const companyId = request.nextUrl.searchParams.get("company_id");
+    const recentCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    let query = admin
+      .from("import_batches")
+      .select(`
+        id,status,imported_rows,rejected_rows,completed_at,created_at,
+        uploaded_files(id,company_id,branch_id,upload_type,original_name,row_count,created_at)
+      `)
+      .gte("created_at", recentCutoff)
+      .order("created_at", { ascending: false })
+      .limit(15);
+    if (companyId) query = query.eq("uploaded_files.company_id", companyId);
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    const imports = ((data ?? []) as unknown as ImportProgressRow[])
+      .map((item) => ({ ...item, uploaded_files: Array.isArray(item.uploaded_files) ? item.uploaded_files[0] ?? null : item.uploaded_files }))
+      .filter((item) => item.uploaded_files?.upload_type === "lead_ready")
+      .map((item) => {
+        const rowCount = item.uploaded_files?.row_count ?? 0;
+        const importedRows = item.imported_rows ?? 0;
+        return {
+          id: item.id,
+          status: item.status,
+          imported_rows: importedRows,
+          rejected_rows: item.rejected_rows ?? 0,
+          row_count: rowCount,
+          progress: item.status === "completed" ? 100 : progressPercent(importedRows, rowCount),
+          completed_at: item.completed_at,
+          created_at: item.created_at,
+          uploaded_file_id: item.uploaded_files?.id,
+          company_id: item.uploaded_files?.company_id,
+          branch_id: item.uploaded_files?.branch_id,
+          original_name: item.uploaded_files?.original_name,
+        };
+      });
+    return NextResponse.json({ imports });
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "Unable to load import progress.", 500);
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -388,6 +547,10 @@ export async function POST(request: NextRequest) {
     const branches = await resolveBranches(admin, payload.company_id);
     if (payload.branch_id && !branches.some((branch) => branch.id === payload.branch_id)) {
       return jsonError("Selected branch does not belong to the selected company.", 400);
+    }
+    const activeImport = await hasActiveImport(admin, payload.company_id);
+    if (activeImport) {
+      return jsonError("A lead import is already running for this company. Wait for it to finish before starting another upload.", 409);
     }
 
     const { data: uploadedFile, error: fileError } = await admin.from("uploaded_files").insert({
@@ -432,41 +595,18 @@ export async function POST(request: NextRequest) {
       if (error) throw new Error(error.message);
     }
 
-    const result = await importLeadRows(admin, actorId, payload, uploadedFile.id, batch.id);
-
-    const { error: completeError } = await admin.from("import_batches").update({
-      status: "completed",
-      imported_rows: result.importedRows,
-      rejected_rows: payload.rows.length - result.importedRows,
-      completed_at: new Date().toISOString(),
-    }).eq("id", batch.id);
-    if (completeError) throw new Error(completeError.message);
-
-    await safeAudit(admin, {
-      company_id: payload.company_id,
-      actor_id: actorId,
-      entity_type: "import_batch",
-      entity_id: batch.id,
-      action: "imported_lead_ready_list",
-      after_data: {
-        uploaded_file_id: uploadedFile.id,
-        original_name: payload.original_name,
-        upload_type: payload.upload_type,
-        row_count: payload.rows.length,
-        imported_rows: result.importedRows,
-        created_leads: result.createdLeads,
-        updated_leads: result.updatedLeads,
-        warning_rows: rowValidation.warnings.length,
-      },
+    after(async () => {
+      await processImportBatch(admin, actorId, payload, uploadedFile.id, batch.id, rowValidation.warnings.length);
     });
 
     return NextResponse.json({
-      message: `Lead import completed: ${result.importedRows} row(s), ${result.createdLeads} new lead(s), ${result.updatedLeads} updated lead(s)`,
+      message: `Lead import started: ${payload.rows.length.toLocaleString()} spreadsheet row(s) are being processed in the background.`,
       uploaded_file_id: uploadedFile.id,
       import_batch_id: batch.id,
       warnings: rowValidation.warnings.slice(0, 50),
-      ...result,
-    });
+      status: "importing",
+      row_count: payload.rows.length,
+    }, { status: 202 });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Unable to import lead-ready list.", 500);
   }

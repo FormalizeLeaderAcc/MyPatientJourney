@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -31,6 +31,20 @@ type UploadedList = {
   original_name: string;
   row_count: number | null;
   created_at: string;
+};
+type ImportProgress = {
+  id: string;
+  status: "importing" | "completed" | "failed" | string;
+  imported_rows: number;
+  rejected_rows: number;
+  row_count: number;
+  progress: number;
+  completed_at: string | null;
+  created_at: string;
+  uploaded_file_id: string;
+  company_id: string;
+  branch_id: string | null;
+  original_name: string;
 };
 
 type CleanupField =
@@ -127,7 +141,7 @@ const leadFields: TargetField<LeadField>[] = [
   { key: "last_visit_total_amount_charged", label: "Last Visit Total Amount Charged", aliases: ["last visit total amount charged", "total amount", "amount charged", "last visit total", "amount"] },
 ];
 
-export function UploadCentre({ notify }: { notify: (message: string) => void }) {
+export function UploadCentre({ notify, onImported }: { notify: (message: string) => void; onImported?: () => void | Promise<void> }) {
   const [activeSection, setActiveSection] = useState<"cleanup" | "upload">("cleanup");
   const [cleanupDatasets, setCleanupDatasets] = useState<CleanupDataset[]>([]);
   const [cleanupProcessing, setCleanupProcessing] = useState(false);
@@ -147,6 +161,7 @@ export function UploadCentre({ notify }: { notify: (message: string) => void }) 
   const [companies, setCompanies] = useState<Company[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [uploadedLists, setUploadedLists] = useState<UploadedList[]>([]);
+  const [importJobs, setImportJobs] = useState<ImportProgress[]>([]);
   const [companyId, setCompanyId] = useState("");
   const [branchId, setBranchId] = useState("");
   const [listToRecall, setListToRecall] = useState<UploadedList | null>(null);
@@ -157,6 +172,14 @@ export function UploadCentre({ notify }: { notify: (message: string) => void }) 
   const [importResult, setImportResult] = useState("");
   const cleanupInputRef = useRef<HTMLInputElement>(null);
   const leadInputRef = useRef<HTMLInputElement>(null);
+
+  const loadImportProgress = useCallback(async (nextCompanyId = companyId) => {
+    if (!isSupabaseConfigured) return;
+    const params = nextCompanyId ? `?company_id=${encodeURIComponent(nextCompanyId)}` : "";
+    const response = await fetch(`/api/imports${params}`, { cache: "no-store" });
+    const result = await response.json();
+    if (response.ok) setImportJobs(result.imports ?? []);
+  }, [companyId]);
 
   async function loadScopeData() {
     if (!isSupabaseConfigured) return;
@@ -172,6 +195,7 @@ export function UploadCentre({ notify }: { notify: (message: string) => void }) 
     }
     if (branchResult.data) setBranches(branchResult.data);
     if (fileResult.data) setUploadedLists(fileResult.data as UploadedList[]);
+    await loadImportProgress(companyId || companyResult.data?.[0]?.id || "");
   }
 
   useEffect(() => { void loadScopeData(); }, []);
@@ -180,8 +204,15 @@ export function UploadCentre({ notify }: { notify: (message: string) => void }) 
   const branchById = useMemo(() => Object.fromEntries(branches.map((branch) => [branch.id, branch])), [branches]);
   const scopedBranches = branches.filter((branch) => branch.company_id === companyId);
   const scopedUploadedLists = uploadedLists.filter((item) => !companyId || item.company_id === companyId);
+  const activeImport = importJobs.find((job) => job.status === "importing" && (!companyId || job.company_id === companyId));
   const leadValidation = useMemo(() => validateLeadImportReadiness(companyId, leadFile, leadRows, leadMappings), [companyId, leadFile, leadRows, leadMappings]);
   const leadWarnings = useMemo(() => leadImportWarnings(leadRows, leadMappings), [leadRows, leadMappings]);
+
+  useEffect(() => {
+    if (!activeImport) return;
+    const interval = window.setInterval(() => { void loadImportProgress(); void onImported?.(); }, 3000);
+    return () => window.clearInterval(interval);
+  }, [activeImport, loadImportProgress, onImported]);
 
   function resetCleanup() {
     setCleanupDatasets([]);
@@ -315,6 +346,8 @@ export function UploadCentre({ notify }: { notify: (message: string) => void }) 
     setImportResult(result.message ?? "Lead import completed");
     notify(result.message ?? "Lead import completed");
     await loadScopeData();
+    await loadImportProgress(companyId);
+    await onImported?.();
   }
 
   async function recallUploadedList() {
@@ -397,14 +430,22 @@ export function UploadCentre({ notify }: { notify: (message: string) => void }) 
         warnings={leadWarnings}
         processing={leadProcessing}
         importing={importing}
+        activeImport={activeImport}
         inputRef={leadInputRef}
-        onCompanyChange={(nextCompanyId) => { setCompanyId(nextCompanyId); setBranchId(""); resetLeadUpload(); }}
+        onCompanyChange={(nextCompanyId) => { setCompanyId(nextCompanyId); setBranchId(""); resetLeadUpload(); void loadImportProgress(nextCompanyId); }}
         onBranchChange={setBranchId}
         onFile={readLeadReadyFile}
         onMappingChange={(field, source) => setLeadMappings((current) => ({ ...current, [field]: source }))}
         onImport={importLeadSpreadsheet}
       />
     )}
+
+    {activeSection === "upload" && <ImportReportsSection
+      jobs={importJobs}
+      companyById={companyById}
+      branchById={branchById}
+      onRefresh={() => loadImportProgress(companyId)}
+    />}
 
     <div className="card" style={{ marginTop: 18 }}>
       <div className="card-head"><div><div className="card-title">Recall / withdraw uploaded lists</div><div className="card-sub">Primary Super User only. This removes one selected imported list and records the reason in the audit log.</div></div></div>
@@ -513,6 +554,7 @@ function UploadLeadsSection({
   warnings,
   processing,
   importing,
+  activeImport,
   inputRef,
   onCompanyChange,
   onBranchChange,
@@ -533,6 +575,7 @@ function UploadLeadsSection({
   warnings: string[];
   processing: boolean;
   importing: boolean;
+  activeImport?: ImportProgress;
   inputRef: React.RefObject<HTMLInputElement | null>;
   onCompanyChange: (companyId: string) => void;
   onBranchChange: (branchId: string) => void;
@@ -553,11 +596,13 @@ function UploadLeadsSection({
       </div>
 
       <input ref={inputRef} hidden type="file" accept=".xlsx,.xls,.csv" onChange={(event) => event.target.files?.[0] && onFile(event.target.files[0])} />
-      <div className="dropzone" onClick={() => companyId ? inputRef.current?.click() : undefined} style={{ opacity: companyId ? 1 : 0.58, marginTop: 16 }}>
+      {activeImport && <ImportProgressPanel job={activeImport} />}
+
+      <div className="dropzone" onClick={() => companyId && !activeImport ? inputRef.current?.click() : undefined} style={{ opacity: companyId && !activeImport ? 1 : 0.58, marginTop: 16 }}>
         <div className="drop-icon">{processing ? <LoaderCircle size={24} className="animate-spin" /> : <UploadCloud size={24} />}</div>
-        <h3>{companyId ? "Upload a clean lead-ready spreadsheet" : "Select a company first"}</h3>
-        <p>Required columns: Patient Name, Account Number, Last Treatment Date. Mobile number is recommended but not blocking.</p>
-        <button className="btn btn-soft" type="button" disabled={!companyId}>Choose lead-ready spreadsheet</button>
+        <h3>{activeImport ? "Import currently running" : companyId ? "Upload a clean lead-ready spreadsheet" : "Select a company first"}</h3>
+        <p>{activeImport ? "You can leave this page and return later. The server will continue processing and the progress bar will update when you come back." : "Required columns: Patient Name, Account Number, Last Treatment Date. Mobile number is recommended but not blocking."}</p>
+        <button className="btn btn-soft" type="button" disabled={!companyId || Boolean(activeImport)}>Choose lead-ready spreadsheet</button>
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
@@ -586,8 +631,66 @@ function UploadLeadsSection({
       </div>}
 
       <div className="modal-actions" style={{ borderRadius: 14, marginTop: 16 }}>
-        <button className="btn btn-primary" disabled={importing || !file || validation.length > 0} onClick={onImport}>{importing ? "Importing..." : "Import lead-ready list"}<ArrowRight size={13}/></button>
+        <button className="btn btn-primary" disabled={importing || Boolean(activeImport) || !file || validation.length > 0} onClick={onImport}>{activeImport ? "Import already running" : importing ? "Starting import..." : "Import lead-ready list"}<ArrowRight size={13}/></button>
       </div>
+    </div>
+  </div>;
+}
+
+function ImportProgressPanel({ job }: { job: ImportProgress }) {
+  const percentage = Math.max(0, Math.min(100, job.progress || 0));
+  return <div className="lead-card" style={{ marginTop: 14, borderColor: "#b7ded8", background: "#f6fbfa" }}>
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+      <div><strong style={{ fontFamily: "Manrope", fontSize: 13 }}>Import in progress</strong><p style={{ fontSize: 10, color: "#637774", marginTop: 4 }}>{job.original_name} - {job.imported_rows.toLocaleString()} of {job.row_count.toLocaleString()} spreadsheet rows processed</p></div>
+      <span className="badge high">{percentage}%</span>
+    </div>
+    <div style={{ height: 9, borderRadius: 999, background: "#dcebe8", overflow: "hidden", marginTop: 12 }}>
+      <div style={{ width: `${percentage}%`, height: "100%", background: "linear-gradient(90deg,#0b7a75,#58aaa2)", transition: "width .35s ease" }} />
+    </div>
+    <div className="callout" style={{ marginTop: 12, marginBottom: 0 }}>
+      <Info size={14}/><span>This company is locked for new lead imports until the current import finishes. You may safely leave this page and return later.</span>
+    </div>
+  </div>;
+}
+
+function ImportReportsSection({
+  jobs,
+  companyById,
+  branchById,
+  onRefresh,
+}: {
+  jobs: ImportProgress[];
+  companyById: Record<string, Company>;
+  branchById: Record<string, Branch>;
+  onRefresh: () => void | Promise<void>;
+}) {
+  return <div className="card" style={{ marginTop: 18 }}>
+    <div className="card-head">
+      <div><div className="card-title">Import reports</div><div className="card-sub">Track uploaded rows, processed rows, rejected rows and background import status.</div></div>
+      <button className="btn btn-secondary" onClick={() => void onRefresh()}><RotateCcw size={13}/>Refresh</button>
+    </div>
+    <div className="table-wrap">
+      <table className="data-table">
+        <thead><tr><th>Import</th><th>Company</th><th>Branch</th><th>Status</th><th>Progress</th><th>Rows uploaded</th><th>Rows processed</th><th>Rejected</th><th>Completed</th></tr></thead>
+        <tbody>{jobs.map((job) => {
+          const progress = Math.max(0, Math.min(100, job.progress || 0));
+          return <tr key={job.id}>
+            <td><strong>{job.original_name}</strong><div style={{ fontSize: 8, color: "#82918f", marginTop: 3 }}>{job.id}</div></td>
+            <td>{companyById[job.company_id]?.name ?? "Unknown"}</td>
+            <td>{job.branch_id ? branchById[job.branch_id]?.name ?? "Unknown" : "Company-wide"}</td>
+            <td><span className={`badge ${job.status === "completed" ? "standard" : job.status === "failed" ? "missing" : "high"}`}>{job.status}</span></td>
+            <td style={{ minWidth: 130 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 8, color: "#617471", marginBottom: 5 }}><span>{progress}%</span><span>{job.imported_rows.toLocaleString()} / {job.row_count.toLocaleString()}</span></div>
+              <div style={{ height: 7, borderRadius: 999, background: "#dcebe8", overflow: "hidden" }}><div style={{ width: `${progress}%`, height: "100%", background: job.status === "failed" ? "#c9656c" : "linear-gradient(90deg,#0b7a75,#58aaa2)" }} /></div>
+            </td>
+            <td>{job.row_count.toLocaleString()}</td>
+            <td>{job.imported_rows.toLocaleString()}</td>
+            <td>{job.rejected_rows.toLocaleString()}</td>
+            <td>{job.completed_at ? new Date(job.completed_at).toLocaleString() : "Still running"}</td>
+          </tr>;
+        })}</tbody>
+      </table>
+      {!jobs.length && <div className="empty-page" style={{ boxShadow: "none" }}><div className="empty-icon"><FileSpreadsheet size={25}/></div><h2>No import reports yet</h2><p>Once a lead-ready list is imported, progress and completion details will appear here.</p></div>}
     </div>
   </div>;
 }

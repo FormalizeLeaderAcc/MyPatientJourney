@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity, Bell, Building2, CalendarCheck, CalendarClock, ChevronDown, ClipboardCheck,
   CloudUpload, FileBarChart, HeartHandshake, LayoutDashboard, ListChecks, LogOut, Menu, Network,
@@ -84,6 +84,8 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
   const [menuOpen, setMenuOpen] = useState(false);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [leadData, setLeadData] = useState<Lead[]>([]);
+  const [leadsLoading, setLeadsLoading] = useState(true);
+  const [leadsError, setLeadsError] = useState("");
   const [toast, setToast] = useState("");
   const [user, setUser] = useState<CurrentUser>({
     name: "MyPatient Journey User",
@@ -92,6 +94,30 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
     initials: "MP",
     workspace: initialRole === "super" ? "All organisations" : "Assigned workspace",
   });
+
+  const loadLeads = useCallback(async () => {
+    if (!isSupabaseConfigured) {
+      setLeadsLoading(false);
+      return;
+    }
+    setLeadsLoading(true);
+    setLeadsError("");
+    try {
+      const response = await fetch("/api/leads", { cache: "no-store" });
+      const result = await response.json();
+      if (!response.ok) {
+        setLeadsError(result.error ?? "Unable to load live patient journeys.");
+        setLeadData([]);
+        return;
+      }
+      setLeadData(result.leads ?? []);
+    } catch {
+      setLeadsError("Unable to load live patient journeys.");
+      setLeadData([]);
+    } finally {
+      setLeadsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     async function loadIdentity() {
@@ -130,6 +156,8 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
     void loadIdentity();
   }, []);
 
+  useEffect(() => { void loadLeads(); }, [loadLeads]);
+
   const flatNav = useMemo(() => roleNav[role].flatMap((section) => section.items), [role]);
   const activeLabel = flatNav.find((item) => item.id === active)?.label ?? "Dashboard";
 
@@ -153,8 +181,12 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
 
   function renderView() {
     if (active === "dashboard") return <Overview role={role} userName={user.name} leads={leadData} onLead={setSelectedLead} onNavigate={navigate} />;
-    if (["leads", "due", "callbacks", "completed", "allocation", "campaigns", "review"].includes(active)) return <LeadsView role={role} mode={active} leads={leadData} onLead={setSelectedLead} notify={notify} />;
-    if (active === "upload") return <UploadCentre notify={notify} />;
+    if (["leads", "due", "callbacks", "completed", "allocation", "campaigns", "review"].includes(active)) return <>
+      {leadsError && <div className="callout" style={{ background: "#fbe9ea", color: "#a84850", marginBottom: 14 }}><ShieldCheck size={14} /><span>{leadsError}</span></div>}
+      {leadsLoading && <div className="callout" style={{ marginBottom: 14 }}><ShieldCheck size={14} /><span>Loading live patient journeys from Supabase...</span></div>}
+      <LeadsView role={role} mode={active} leads={leadData} onLead={setSelectedLead} notify={notify} />
+    </>;
+    if (active === "upload") return <UploadCentre notify={notify} onImported={loadLeads} />;
     if (active === "verification") return <BookingVerification leads={leadData} notify={notify} onUpdate={updateLead} />;
     if (active === "companies" || active === "branches" || active === "users") return <CompaniesView mode={active} notify={notify} />;
     if (active === "medical-aid") return <MedicalAidView notify={notify} />;
