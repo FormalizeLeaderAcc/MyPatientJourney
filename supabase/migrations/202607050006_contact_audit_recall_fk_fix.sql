@@ -26,7 +26,12 @@ begin
     coalesce(new.patient_id, old.patient_id),
     case when tg_op = 'DELETE' then null else coalesce(new.id, old.id) end,
     coalesce(new.updated_by, old.updated_by),
-    lower(tg_op),
+    case tg_op
+      when 'INSERT' then 'created'
+      when 'UPDATE' then 'updated'
+      when 'DELETE' then 'deleted'
+      else lower(tg_op)
+    end,
     case when tg_op in ('UPDATE','DELETE') then to_jsonb(old) else null end,
     case when tg_op in ('INSERT','UPDATE') then to_jsonb(new) else null end
   );
