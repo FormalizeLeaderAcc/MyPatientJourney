@@ -14,6 +14,18 @@ const finalStatuses = new Set([
   "Manager Closed",
 ]);
 
+function isEmployeeActionable(lead: Lead) {
+  return !finalStatuses.has(lead.status)
+    && lead.status !== "Manager Review"
+    && lead.status !== "Booking Recorded Pending Verification"
+    && (
+      lead.nextAction === "Due today"
+      || lead.nextAction === "Overdue"
+      || lead.status === "Callback Due"
+      || lead.status === "Call Back Later"
+    );
+}
+
 function Metrics({ items }: { items: Metric[] }) {
   return <div className="metric-grid">{items.map((item) => <div className={`metric-card ${item.tone}`} key={item.label}><div className="metric-label">{item.label}</div><div className="metric-value">{item.value}</div><div className="metric-trend">{item.trend}</div></div>)}</div>;
 }
@@ -47,6 +59,7 @@ export function Overview({ role, userName, leads, stats, onLead, onNavigate }: {
   const overdueCallbacks = activeLeads.filter((lead) => lead.nextAction === "Overdue");
   const dueToday = activeLeads.filter((lead) => lead.nextAction === "Due today");
   const callbackLeads = activeLeads.filter((lead) => ["Callback Due", "Call Back Later"].includes(lead.status));
+  const actionableLeads = activeLeads.filter(isEmployeeActionable);
   const booked = leads.filter((lead) => ["Booking Recorded Pending Verification", "Patient Booked and Verified"].includes(lead.status));
   const contacted = leads.filter((lead) => lead.attempts > 0);
   const metrics: Metric[] = role === "super"
@@ -70,7 +83,7 @@ export function Overview({ role, userName, leads, stats, onLead, onNavigate }: {
         { label: "Bookings recorded", value: booked.length.toLocaleString(), trend: booked.length ? "Includes pending verification" : "No bookings yet", tone: "orange" },
       ];
   const title = role === "employee" ? `Welcome, ${userName.split(" ")[0] || "there"}` : role === "manager" ? "Branch overview" : "Organisation overview";
-  const sub = role === "employee" ? "Your allocated patient follow-ups will appear here." : role === "manager" ? "Live branch activity, callbacks and booking checks across your team." : "Live organisation, upload and recall journey performance across Formalize clients.";
+  const sub = role === "employee" ? "Your due patient follow-ups will appear here when they are ready for action." : role === "manager" ? "Live branch activity, callbacks and booking checks across your team." : "Live organisation, upload and recall journey performance across Formalize clients.";
   return <>
     <div className="page-head"><div><h1>{title}</h1><p>{sub}</p></div><div className="head-actions">{role === "super" && <button className="btn btn-secondary" onClick={() => onNavigate("upload")}><FileSpreadsheet size={14} /><span>Import data</span></button>}<button className="btn btn-primary" onClick={() => onNavigate(role === "super" ? "companies" : role === "manager" ? "verification" : "leads")}><HeartIcon /><span>{role === "super" ? "Start setup" : role === "manager" ? "Verify bookings" : "Open recall work"}</span></button></div></div>
     <Metrics items={metrics} />
@@ -78,8 +91,8 @@ export function Overview({ role, userName, leads, stats, onLead, onNavigate }: {
     {role === "employee" && <>
       <div className="dashboard-grid">
         <div className="card">
-          <div className="card-head"><div><div className="card-title">Next patients to support</div><div className="card-sub">Allocated patient journeys</div></div></div>
-          <LeadRows leads={activeLeads} onLead={onLead} />
+          <div className="card-head"><div><div className="card-title">Next patients to support</div><div className="card-sub">Only recalls due now, overdue, or scheduled for callback</div></div></div>
+          <LeadRows leads={actionableLeads} onLead={onLead} />
         </div>
         <EmptyCard title="No care goal yet" body="Weekly targets will be shown once your manager allocates live recall journeys." />
       </div>

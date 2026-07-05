@@ -121,6 +121,19 @@ function contactDay(value: string) {
   return Number.isNaN(date.getTime()) ? value.slice(0, 10) : date.toISOString().slice(0, 10);
 }
 
+function addMonths(date: Date, months: number) {
+  const next = new Date(date);
+  next.setMonth(next.getMonth() + months);
+  return next;
+}
+
+function sixMonthRecallDate(value: string | null | undefined) {
+  if (!value) return null;
+  const parsed = new Date(`${value.slice(0, 10)}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return addMonths(parsed, 6).toISOString();
+}
+
 function managerReviewContext(audits: AuditRow[], actorNameFor: (actorId: string | null) => string | null): Lead["managerReview"] {
   const relevant = audits
     .filter((audit) => {
@@ -290,6 +303,9 @@ export async function GET(request: NextRequest) {
       : "Standard Six-Month Recall";
     const refs = lead.integration_refs ?? {};
     const phone = contactFor(contacts, "mobile", true) || contactFor(contacts, "mobile") || String(refs.mobile_number ?? "");
+    const nextActionAt = refs.due_for_six_month_recall === false && ["New", "Allocated"].includes(status) && attempts.length === 0
+      ? sixMonthRecallDate(lead.last_visit_date) ?? lead.next_action_at
+      : lead.next_action_at;
 
     return {
       id: lead.id,
@@ -313,7 +329,7 @@ export async function GET(request: NextRequest) {
       reason: lead.recall_reason,
       attempts: attempts.length,
       attemptDays: Math.max(lead.unsuccessful_attempt_days ?? 0, new Set(attempts.map((attempt) => contactDay(attempt.attempted_at))).size),
-      nextAction: nextActionLabel(lead.next_action_at, status),
+      nextAction: nextActionLabel(nextActionAt, status),
       latestOutcome: status === "New" ? "Not contacted yet" : status,
       status,
       managerReview: managerReviewContext(audits, (actorId) => {

@@ -137,6 +137,10 @@ function isSixMonthRecallDue(lastTreatmentDate: string) {
   return lastTreatmentDate <= addMonths(new Date(), -6).toISOString().slice(0, 10);
 }
 
+function sixMonthRecallDate(lastTreatmentDate: string) {
+  return addMonths(new Date(`${lastTreatmentDate}T00:00:00.000Z`), 6).toISOString();
+}
+
 function treatmentCodesContain(codes: string, code: "8101" | "8159") {
   return codes.split(/[,;/\s]+/).map((item) => item.trim()).includes(code);
 }
@@ -368,7 +372,7 @@ async function importLeadRows(
       last_visit_date: lastTreatmentDate,
       last_8101_date: treatmentCodesContain(treatmentCode, "8101") ? lastTreatmentDate : null,
       last_8159_date: treatmentCodesContain(treatmentCode, "8159") ? lastTreatmentDate : null,
-      next_action_at: new Date().toISOString(),
+      next_action_at: dueForSixMonthRecall ? new Date().toISOString() : sixMonthRecallDate(lastTreatmentDate),
       integration_refs: integrationRefs,
       updated_at: new Date().toISOString(),
     };

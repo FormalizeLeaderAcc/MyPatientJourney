@@ -19,6 +19,18 @@ const finalStatuses: LeadStatus[] = [
   "Manager Closed",
 ];
 
+function isEmployeeActionable(lead: Lead) {
+  return !finalStatuses.includes(lead.status)
+    && lead.status !== "Manager Review"
+    && lead.status !== "Booking Recorded Pending Verification"
+    && (
+      lead.nextAction === "Due today"
+      || lead.nextAction === "Overdue"
+      || lead.status === "Callback Due"
+      || lead.status === "Call Back Later"
+    );
+}
+
 export function LeadsView({
   role,
   mode,
@@ -44,7 +56,7 @@ export function LeadsView({
   const visible = useMemo(() => leads.filter((lead) => {
     const matchesQuery = `${lead.patient} ${lead.account} ${lead.phone}`.toLowerCase().includes(query.toLowerCase());
     const matchesMode = mode === "due"
-      ? lead.nextAction.toLowerCase().includes("today")
+      ? lead.nextAction === "Due today" || lead.nextAction === "Overdue" || lead.status === "Callback Due"
       : mode === "callbacks"
         ? ["Callback Due", "Call Back Later"].includes(lead.status)
         : mode === "completed"
@@ -147,7 +159,7 @@ export function LeadsView({
       notify("No eligible patients are available yet because no live leads have been generated or allocated to you.");
       return;
     }
-    const eligible = visible.find((lead) => !finalStatuses.includes(lead.status) && lead.status !== "Manager Review" && lead.status !== "Booking Recorded Pending Verification");
+    const eligible = visible.find(isEmployeeActionable);
     if (eligible) {
       onLead(eligible);
       notify(`${eligible.patient} opened as your next eligible patient journey`);
@@ -158,6 +170,7 @@ export function LeadsView({
       visible.length > 0 && visible.every((lead) => finalStatuses.includes(lead.status)) ? "all visible patients are completed" : "",
       visible.some((lead) => lead.status === "Booking Recorded Pending Verification") ? "some patients are awaiting manager booking verification" : "",
       visible.some((lead) => lead.status === "Manager Review") ? "some patients require manager review" : "",
+      visible.some((lead) => !isEmployeeActionable(lead)) ? "some patients are allocated but not due for action yet" : "",
     ].filter(Boolean).join("; ");
     notify(`No eligible patients available right now${reasons ? `: ${reasons}` : ". Check Due Today, Callbacks, or ask a manager for more allocated work."}`);
   }
