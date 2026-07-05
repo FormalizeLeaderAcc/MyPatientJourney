@@ -203,25 +203,23 @@ export async function GET(request: NextRequest) {
   const isManager = roles.some((row) => row.role === "manager");
   const isEmployee = roles.some((row) => row.role === "employee");
 
-  let query = admin
-    .from("leads")
-    .select(`
+  const leadSelect = `
       id, company_id, branch_id, patient_id, source_import_batch_id, status,
       priority_label, recall_reason, last_visit_date, last_8101_date, last_8159_date,
       next_action_at, unsuccessful_attempt_days, integration_refs,
       patients(id, full_name, account_number, medical_aid_scheme, medical_aid_option),
       branches(id, name)
-    `)
-    .order("created_at", { ascending: false })
-    .limit(1000);
+    `;
+
+  let managerBranchIds: string[] = [];
+  let managerCompanyIds: string[] = [];
+  let employeeLeadIds: string[] | null = null;
 
   if (!isSuper) {
     if (isManager) {
-      const branchIds = roles.filter((row) => row.role === "manager" && row.branch_id).map((row) => row.branch_id as string);
-      const companyIds = roles.filter((row) => row.role === "manager" && row.company_id).map((row) => row.company_id as string);
-      if (branchIds.length) query = query.in("branch_id", branchIds);
-      else if (companyIds.length) query = query.in("company_id", companyIds);
-      else return NextResponse.json({ leads: [] });
+      managerBranchIds = roles.filter((row) => row.role === "manager" && row.branch_id).map((row) => row.branch_id as string);
+      managerCompanyIds = roles.filter((row) => row.role === "manager" && row.company_id).map((row) => row.company_id as string);
+      if (!managerBranchIds.length && !managerCompanyIds.length) return NextResponse.json({ leads: [] });
     } else if (isEmployee) {
       const { data: assignments, error: assignmentError } = await admin
         .from("lead_assignments")
@@ -229,32 +227,67 @@ export async function GET(request: NextRequest) {
         .eq("employee_id", authData.user.id)
         .is("ended_at", null);
       if (assignmentError) return jsonError(assignmentError.message, 500);
-      const leadIds = (assignments ?? []).map((assignment: { lead_id: string }) => assignment.lead_id);
-      if (!leadIds.length) return NextResponse.json({ leads: [] });
-      query = query.in("id", leadIds);
+      employeeLeadIds = (assignments ?? []).map((assignment: { lead_id: string }) => assignment.lead_id);
+      if (!employeeLeadIds.length) return NextResponse.json({ leads: [] });
     } else {
       return jsonError("Your account does not have permission to view leads.", 403);
     }
   }
 
-  const { data, error } = await query;
-  if (error) return jsonError(error.message, 500);
-  const leadRows = (data ?? []) as LeadRow[];
+  const leadRows: LeadRow[] = [];
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    let query = admin
+      .from("leads")
+      .select(leadSelect)
+      .order("created_at", { ascending: false })
+      .range(from, from + pageSize - 1);
+
+    if (!isSuper) {
+      if (isManager) {
+        if (managerBranchIds.length) query = query.in("branch_id", managerBranchIds);
+        else if (managerCompanyIds.length) query = query.in("company_id", managerCompanyIds);
+        else return NextResponse.json({ leads: [] });
+      } else if (isEmployee) {
+        if (!employeeLeadIds?.length) return NextResponse.json({ leads: [] });
+        query = query.in("id", employeeLeadIds);
+      }
+    }
+
+    const { data, error } = await query;
+    if (error) return jsonError(error.message, 500);
+    const pageRows = (data ?? []) as LeadRow[];
+    leadRows.push(...pageRows);
+    if (pageRows.length < pageSize) break;
+  }
   const patientIds = Array.from(new Set(leadRows.map((lead) => lead.patient_id).filter(Boolean)));
   const leadIds = leadRows.map((lead) => lead.id);
+  async function selectInChunks<T>(
+    values: string[],
+    runQuery: (chunk: string[]) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+  ) {
+    const rows: T[] = [];
+    const chunkSize = 500;
+    for (let index = 0; index < values.length; index += chunkSize) {
+      const { data, error } = await runQuery(values.slice(index, index + chunkSize));
+      if (error) return { data: rows, error };
+      rows.push(...(data ?? []));
+    }
+    return { data: rows, error: null };
+  }
 
   const [contactResult, assignmentResult, attemptResult, auditResult] = await Promise.all([
     patientIds.length
-      ? admin.from("patient_contacts").select("patient_id,contact_type,value,is_primary").in("patient_id", patientIds)
+      ? selectInChunks<ContactRow>(patientIds, (ids) => admin.from("patient_contacts").select("patient_id,contact_type,value,is_primary").in("patient_id", ids))
       : Promise.resolve({ data: [], error: null }),
     leadIds.length
-      ? admin.from("lead_assignments").select("lead_id,employee_id").in("lead_id", leadIds).is("ended_at", null)
+      ? selectInChunks<AssignmentRow>(leadIds, (ids) => admin.from("lead_assignments").select("lead_id,employee_id").in("lead_id", ids).is("ended_at", null))
       : Promise.resolve({ data: [], error: null }),
     leadIds.length
-      ? admin.from("lead_attempts").select("lead_id,attempted_at").in("lead_id", leadIds)
+      ? selectInChunks<AttemptRow>(leadIds, (ids) => admin.from("lead_attempts").select("lead_id,attempted_at").in("lead_id", ids))
       : Promise.resolve({ data: [], error: null }),
     leadIds.length
-      ? admin.from("audit_logs").select("entity_id,actor_id,action,after_data,created_at").eq("entity_type", "lead").in("entity_id", leadIds).order("created_at", { ascending: false })
+      ? selectInChunks<AuditRow>(leadIds, (ids) => admin.from("audit_logs").select("entity_id,actor_id,action,after_data,created_at").eq("entity_type", "lead").in("entity_id", ids).order("created_at", { ascending: false }))
       : Promise.resolve({ data: [], error: null }),
   ]);
   if (contactResult.error) return jsonError(contactResult.error.message, 500);
