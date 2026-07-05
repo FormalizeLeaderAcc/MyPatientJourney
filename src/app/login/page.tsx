@@ -78,7 +78,7 @@ export default function LoginPage() {
             {error && <div className="callout" style={{background:"#fbe9ea",color:"#a84850"}}><ShieldCheck size={14}/><span>{error}</span></div>}
             <div className="login-row">
               <label className="check"><input type="checkbox" defaultChecked /> Keep me signed in</label>
-              <a href="#" className="text-link">Forgot password?</a>
+              <a href="/forgot-password" className="text-link">Forgot password?</a>
             </div>
             <button className="btn btn-primary btn-wide" type="submit">{loading ? "Opening your workspace…" : <>Sign in securely <ArrowRight size={16} /></>}</button>
           </form>

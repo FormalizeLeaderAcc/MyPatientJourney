@@ -1,19 +1,45 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CheckCircle2, KeyRound, LoaderCircle, ShieldCheck, Stethoscope } from "lucide-react";
+import { ArrowRight, CheckCircle2, KeyRound, LoaderCircle, ShieldCheck, Stethoscope } from "lucide-react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { Role } from "@/lib/types";
 
+type Phase = "checking" | "awaiting_confirmation" | "set_password";
+
+function isTrustedConfirmationUrl(value: string) {
+  try {
+    const candidate = new URL(value);
+    const supabaseUrl = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL!);
+    return candidate.protocol === "https:" && candidate.origin === supabaseUrl.origin && candidate.pathname === "/auth/v1/verify";
+  } catch {
+    return false;
+  }
+}
+
 export default function ConfirmAccountPage() {
-  const [ready, setReady] = useState(false);
+  const [phase, setPhase] = useState<Phase>("checking");
+  const [confirmationUrl, setConfirmationUrl] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    const suppliedConfirmationUrl = new URLSearchParams(window.location.search).get("confirmation_url");
+    if (suppliedConfirmationUrl) {
+      if (!isTrustedConfirmationUrl(suppliedConfirmationUrl)) {
+        setError("This confirmation link is not valid. Request a new email from your administrator.");
+        return;
+      }
+      setConfirmationUrl(suppliedConfirmationUrl);
+      setPhase("awaiting_confirmation");
+      return;
+    }
+
     const supabase = createSupabaseBrowserClient();
+    let timeout: number | undefined;
+    let unsubscribe: (() => void) | undefined;
 
     async function establishSession() {
       const code = new URLSearchParams(window.location.search).get("code");
@@ -24,25 +50,38 @@ export default function ConfirmAccountPage() {
 
       const { data, error: sessionError } = await supabase.auth.getSession();
       if (sessionError) { setError(sessionError.message); return; }
-      if (data.session) { setReady(true); return; }
+      if (data.session) { setPhase("set_password"); return; }
 
       const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-        if (session) setReady(true);
+        if (session) setPhase("set_password");
       });
-      window.setTimeout(() => {
-        setError((current) => current || "This invitation link is invalid or has expired. Request a new invitation from your administrator.");
+      unsubscribe = () => listener.subscription.unsubscribe();
+      timeout = window.setTimeout(() => {
+        setError((current) => current || "This invitation or recovery link is invalid, expired, or has already been used. Request a new email.");
       }, 5000);
-      return () => listener.subscription.unsubscribe();
     }
 
-    establishSession();
+    void establishSession();
+    return () => {
+      if (timeout !== undefined) window.clearTimeout(timeout);
+      unsubscribe?.();
+    };
   }, []);
+
+  function continueConfirmation() {
+    if (!isTrustedConfirmationUrl(confirmationUrl)) {
+      setError("This confirmation link is not valid. Request a new email from your administrator.");
+      return;
+    }
+    window.location.assign(confirmationUrl);
+  }
 
   async function completeSetup(event: React.FormEvent) {
     event.preventDefault();
     if (password.length < 12) { setError("Use at least 12 characters for your password."); return; }
     if (password !== confirmPassword) { setError("The passwords do not match."); return; }
-    setSaving(true); setError("");
+    setSaving(true);
+    setError("");
 
     const supabase = createSupabaseBrowserClient();
     const { data, error: updateError } = await supabase.auth.updateUser({ password });
@@ -54,21 +93,25 @@ export default function ConfirmAccountPage() {
     window.location.href = "/dashboard";
   }
 
+  const awaitingConfirmation = phase === "awaiting_confirmation";
+  const ready = phase === "set_password";
+
   return <main className="login-shell">
     <section className="login-visual">
-      <div className="brand"><div className="brand-mark"><Stethoscope size={22}/></div><div className="brand-word">MyPatient Journey</div></div>
-      <div className="login-copy"><div className="eyebrow">Secure account activation</div><h1>Your patient-care workspace is ready.</h1><p>Choose a strong password to activate your account. Your access is protected by role-based permissions and an auditable patient journey.</p></div>
+      <div className="brand"><div className="brand-mark"><Stethoscope size={22} /></div><div className="brand-word">MyPatient Journey</div></div>
+      <div className="login-copy"><div className="eyebrow">Secure account access</div><h1>Your patient-care workspace is ready.</h1><p>Confirm this request, then choose a strong password. Your access is protected by role-based permissions and an auditable patient journey.</p></div>
       <div className="login-foot">Every patient. Every recall. Every follow-up tracked.</div>
     </section>
     <section className="login-form-wrap"><div className="login-card">
-      <div className="drop-icon" style={{ margin: "0 0 18px" }}>{ready ? <KeyRound size={23}/> : <LoaderCircle size={23} className="animate-spin"/>}</div>
-      <h2>{ready ? "Set your password" : "Verifying invitation"}</h2>
-      <p className="login-sub">{ready ? "Create a password with at least 12 characters." : "We’re securely validating your account invitation."}</p>
-      {error && <div className="callout" style={{ background: "#fbe9ea", color: "#a84850" }}><ShieldCheck size={14}/><span>{error}</span></div>}
+      <div className="drop-icon" style={{ margin: "0 0 18px" }}>{ready ? <KeyRound size={23} /> : awaitingConfirmation ? <ShieldCheck size={23} /> : <LoaderCircle size={23} className="animate-spin" />}</div>
+      <h2>{ready ? "Set your password" : awaitingConfirmation ? "Confirm this request" : "Verifying secure link"}</h2>
+      <p className="login-sub">{ready ? "Create a password with at least 12 characters." : awaitingConfirmation ? "For your protection, the one-time security link will only be used after you continue." : "We are securely validating your account access."}</p>
+      {error && <div className="callout" style={{ background: "#fbe9ea", color: "#a84850" }}><ShieldCheck size={14} /><span>{error}</span></div>}
+      {awaitingConfirmation && <button className="btn btn-primary btn-wide" type="button" onClick={continueConfirmation}>Continue securely <ArrowRight size={16} /></button>}
       {ready && <form onSubmit={completeSetup}>
-        <div className="field"><label htmlFor="new-password">New password</label><div className="input-wrap"><KeyRound size={16}/><input id="new-password" className="input" type="password" autoComplete="new-password" value={password} onChange={(e)=>setPassword(e.target.value)} required minLength={12}/></div></div>
-        <div className="field"><label htmlFor="confirm-password">Confirm password</label><div className="input-wrap"><CheckCircle2 size={16}/><input id="confirm-password" className="input" type="password" autoComplete="new-password" value={confirmPassword} onChange={(e)=>setConfirmPassword(e.target.value)} required minLength={12}/></div></div>
-        <button className="btn btn-primary btn-wide" disabled={saving}>{saving ? "Activating account…" : "Activate my account"}</button>
+        <div className="field"><label htmlFor="new-password">New password</label><div className="input-wrap"><KeyRound size={16} /><input id="new-password" className="input" type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={12} /></div></div>
+        <div className="field"><label htmlFor="confirm-password">Confirm password</label><div className="input-wrap"><CheckCircle2 size={16} /><input id="confirm-password" className="input" type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required minLength={12} /></div></div>
+        <button className="btn btn-primary btn-wide" disabled={saving}>{saving ? "Saving password..." : "Save password and continue"}</button>
       </form>}
     </div></section>
   </main>;
