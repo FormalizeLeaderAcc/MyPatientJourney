@@ -78,3 +78,20 @@ export interface Metric {
   trend?: string;
   tone?: "teal" | "blue" | "violet" | "orange" | "rose";
 }
+
+export interface AuditEvent {
+  id: number;
+  companyId: string | null;
+  companyName: string;
+  actorId: string | null;
+  actorName: string;
+  actorEmail: string;
+  entityType: string;
+  entityId: string | null;
+  action: string;
+  beforeData: Record<string, unknown> | null;
+  afterData: Record<string, unknown> | null;
+  createdAt: string;
+  requestId: string | null;
+  ipAddress: string | null;
+}

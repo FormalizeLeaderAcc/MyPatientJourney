@@ -18,6 +18,7 @@ import { RecallCampaignsView } from "./views/recall-campaigns-view";
 import { PlaceholderView } from "./views/placeholder-view";
 import { AccountSettingsView } from "./views/account-settings-view";
 import { ReportsView } from "./views/reports-view";
+import { AuditTrailView } from "./views/audit-trail-view";
 import { LeadDrawer } from "./lead-drawer";
 import { createSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client";
 
@@ -41,6 +42,7 @@ const roleNav: Record<Role, { section: string; items: NavItem[] }[]> = {
     ]},
     { section: "Insights", items: [
       { id: "reports", label: "Reports", icon: FileBarChart },
+      { id: "audit", label: "Audit Trail", icon: ShieldCheck },
       { id: "settings", label: "Settings", icon: Settings },
     ]},
   ],
@@ -237,6 +239,7 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
     if (active === "medical-aid") return <MedicalAidView notify={notify} />;
     if (active === "team") return <TeamActivity leads={leadData} employees={assignableUsers} onNavigate={navigate} />;
     if (active === "reports") return <ReportsView leads={leadData} role={role} notify={notify} />;
+    if (active === "audit" && role === "super") return <AuditTrailView notify={notify} />;
     if (active === "settings") return <AccountSettingsView user={user} onUserUpdate={updateCurrentUser} notify={notify} />;
     return <PlaceholderView title={activeLabel} role={role} />;
   }
