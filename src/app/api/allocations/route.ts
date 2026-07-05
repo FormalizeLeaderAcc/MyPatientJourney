@@ -4,6 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 
 type AppRole = "super_user" | "sub_super_user" | "manager" | "employee";
 type RoleRow = { role: AppRole; company_id: string | null; branch_id: string | null };
+type UserRoleRow = RoleRow & { user_id: string };
 type UserRow = {
   id: string;
   full_name: string;
@@ -83,12 +84,21 @@ function scopedBranchIds(roles: RoleRow[]) {
   return Array.from(new Set(roles.filter((row) => row.branch_id).map((row) => row.branch_id as string)));
 }
 
-function userAllowedByRequester(user: UserRow, roles: RoleRow[], isSuper: boolean) {
+function effectiveUserScope(user: UserRow, userRoles: RoleRow[] = []) {
+  const employeeRole = userRoles.find((row) => row.role === "employee") ?? userRoles[0];
+  return {
+    companyId: user.company_id ?? employeeRole?.company_id ?? null,
+    branchId: user.branch_id ?? employeeRole?.branch_id ?? null,
+  };
+}
+
+function userAllowedByRequester(user: UserRow, roles: RoleRow[], isSuper: boolean, userRoles: RoleRow[] = []) {
   if (isSuper) return true;
+  const userScope = effectiveUserScope(user, userRoles);
   const companyIds = scopedCompanyIds(roles);
   const branchIds = scopedBranchIds(roles);
-  if (branchIds.length) return Boolean(user.branch_id && branchIds.includes(user.branch_id));
-  return Boolean(user.company_id && companyIds.includes(user.company_id));
+  if (branchIds.length) return Boolean(userScope.branchId && branchIds.includes(userScope.branchId));
+  return Boolean(userScope.companyId && companyIds.includes(userScope.companyId));
 }
 
 function leadAllowedByRequester(lead: LeadRow, roles: RoleRow[], isSuper: boolean) {
@@ -99,9 +109,10 @@ function leadAllowedByRequester(lead: LeadRow, roles: RoleRow[], isSuper: boolea
   return companyIds.includes(lead.company_id);
 }
 
-function leadAssignableToUser(lead: LeadRow, user: UserRow) {
-  if (!user.company_id || lead.company_id !== user.company_id) return false;
-  if (lead.branch_id && user.branch_id && lead.branch_id !== user.branch_id) return false;
+function leadAssignableToUser(lead: LeadRow, user: UserRow, userRoles: RoleRow[] = []) {
+  const userScope = effectiveUserScope(user, userRoles);
+  if (!userScope.companyId || lead.company_id !== userScope.companyId) return false;
+  if (lead.branch_id && userScope.branchId && lead.branch_id !== userScope.branchId) return false;
   return activeStatuses.includes(lead.status);
 }
 
@@ -128,17 +139,26 @@ export async function GET(request: NextRequest) {
       .order("full_name");
     if (userError) throw new Error(userError.message);
 
+    const roleRows = (employeeRoles ?? []) as UserRoleRow[];
+    const rolesByUser = new Map<string, RoleRow[]>();
+    roleRows.forEach((row) => {
+      rolesByUser.set(row.user_id, [...(rolesByUser.get(row.user_id) ?? []), row]);
+    });
+
     const assignable = ((users ?? []) as UserRow[])
       .filter(isActiveUser)
-      .filter((user) => userAllowedByRequester(user, roles, isSuper))
-      .map((user) => ({
-        id: user.id,
-        name: user.full_name,
-        email: user.email,
-        role: "employee",
-        companyId: user.company_id,
-        branchId: user.branch_id,
-      }));
+      .filter((user) => userAllowedByRequester(user, roles, isSuper, rolesByUser.get(user.id) ?? []))
+      .map((user) => {
+        const scope = effectiveUserScope(user, rolesByUser.get(user.id) ?? []);
+        return {
+          id: user.id,
+          name: user.full_name,
+          email: user.email,
+          role: "employee",
+          companyId: scope.companyId,
+          branchId: scope.branchId,
+        };
+      });
 
     return NextResponse.json({ users: assignable });
   } catch (error) {
@@ -162,13 +182,26 @@ export async function POST(request: NextRequest) {
 
     const { data: targetRoles, error: targetRoleError } = await admin
       .from("user_roles")
-      .select("role")
+      .select("role,company_id,branch_id")
       .eq("user_id", payload.employee_id);
     if (targetRoleError) throw new Error(targetRoleError.message);
     if (!(targetRoles ?? []).some((row: { role: string }) => row.role === "employee")) {
       return jsonError("Lead allocation is currently limited to Employee / Patient Care Coordinator accounts.");
     }
-    if (!userAllowedByRequester(targetUser as UserRow, roles, isSuper)) return jsonError("You cannot allocate work to an employee outside your assigned scope.", 403);
+    const targetRoleRows = (targetRoles ?? []) as RoleRow[];
+    const targetScope = effectiveUserScope(targetUser as UserRow, targetRoleRows);
+    if (!userAllowedByRequester(targetUser as UserRow, roles, isSuper, targetRoleRows)) return jsonError("You cannot allocate work to an employee outside your assigned scope.", 403);
+    if (!targetScope.companyId) return jsonError("The selected employee is not assigned to a company. Edit the employee and assign a company before allocating work.", 409);
+
+    if ((targetUser as UserRow).company_id !== targetScope.companyId || ((targetUser as UserRow).branch_id ?? null) !== (targetScope.branchId ?? null)) {
+      const { error: syncError } = await admin
+        .from("users")
+        .update({ company_id: targetScope.companyId, branch_id: targetScope.branchId ?? null })
+        .eq("id", payload.employee_id);
+      if (syncError) throw new Error(syncError.message);
+      (targetUser as UserRow).company_id = targetScope.companyId;
+      (targetUser as UserRow).branch_id = targetScope.branchId ?? null;
+    }
 
     const requestedLimit = Math.max(1, Math.min(Number(payload.limit ?? 25), 250));
     let leadQuery = admin
@@ -184,14 +217,14 @@ export async function POST(request: NextRequest) {
       leadQuery = leadQuery.eq("status", "new");
       if (payload.company_id) leadQuery = leadQuery.eq("company_id", payload.company_id);
       if (payload.branch_id) leadQuery = leadQuery.eq("branch_id", payload.branch_id);
-      if ((targetUser as UserRow).company_id) leadQuery = leadQuery.eq("company_id", (targetUser as UserRow).company_id);
+      leadQuery = leadQuery.eq("company_id", targetScope.companyId);
     }
 
     const { data: leads, error: leadError } = await leadQuery;
     if (leadError) throw new Error(leadError.message);
     const candidateLeads = ((leads ?? []) as LeadRow[])
       .filter((lead) => leadAllowedByRequester(lead, roles, isSuper))
-      .filter((lead) => leadAssignableToUser(lead, targetUser as UserRow));
+      .filter((lead) => leadAssignableToUser(lead, targetUser as UserRow, targetRoleRows));
     if (!candidateLeads.length) return jsonError("No eligible unassigned leads are available for the selected employee and scope.", 409);
 
     const candidateIds = candidateLeads.map((lead) => lead.id);
@@ -225,7 +258,7 @@ export async function POST(request: NextRequest) {
 
     await safeAudit(admin, {
       actor_id: actorId,
-      company_id: (targetUser as UserRow).company_id,
+      company_id: targetScope.companyId,
       entity_type: "lead_assignment",
       action: "allocated_leads",
       after_data: {
