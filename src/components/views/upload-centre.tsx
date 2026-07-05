@@ -39,6 +39,7 @@ type ImportProgress = {
   rejected_rows: number;
   row_count: number;
   progress: number;
+  source_metadata?: Record<string, unknown>;
   completed_at: string | null;
   created_at: string;
   uploaded_file_id: string;
@@ -664,33 +665,84 @@ function ImportReportsSection({
   branchById: Record<string, Branch>;
   onRefresh: () => void | Promise<void>;
 }) {
-  return <div className="card" style={{ marginTop: 18 }}>
-    <div className="card-head">
-      <div><div className="card-title">Import reports</div><div className="card-sub">Track uploaded rows, processed rows, rejected rows and background import status.</div></div>
-      <button className="btn btn-secondary" onClick={() => void onRefresh()}><RotateCcw size={13}/>Refresh</button>
+  const [selectedJob, setSelectedJob] = useState<ImportProgress | null>(null);
+  return <>
+    <div className="card" style={{ marginTop: 18 }}>
+      <div className="card-head">
+        <div><div className="card-title">Import reports</div><div className="card-sub">Persistent history for importing, completed and failed lead-ready uploads. Click a row to view status details.</div></div>
+        <button className="btn btn-secondary" onClick={() => void onRefresh()}><RotateCcw size={13}/>Refresh</button>
+      </div>
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead><tr><th>Import</th><th>Company</th><th>Branch</th><th>Status</th><th>Progress</th><th>Rows uploaded</th><th>Rows processed</th><th>Rejected</th><th>Completed</th><th>Action</th></tr></thead>
+          <tbody>{jobs.map((job) => {
+            const progress = Math.max(0, Math.min(100, job.progress || 0));
+            return <tr key={job.id} onClick={() => setSelectedJob(job)} style={{ cursor: "pointer" }}>
+              <td><strong>{job.original_name}</strong><div style={{ fontSize: 8, color: "#82918f", marginTop: 3 }}>{job.id}</div></td>
+              <td>{companyById[job.company_id]?.name ?? "Unknown"}</td>
+              <td>{job.branch_id ? branchById[job.branch_id]?.name ?? "Unknown" : "Company-wide"}</td>
+              <td><span className={`badge ${job.status === "completed" ? "standard" : job.status === "failed" ? "missing" : "high"}`}>{job.status}</span></td>
+              <td style={{ minWidth: 130 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 8, color: "#617471", marginBottom: 5 }}><span>{progress}%</span><span>{job.imported_rows.toLocaleString()} / {job.row_count.toLocaleString()}</span></div>
+                <div style={{ height: 7, borderRadius: 999, background: "#dcebe8", overflow: "hidden" }}><div style={{ width: `${progress}%`, height: "100%", background: job.status === "failed" ? "#c9656c" : "linear-gradient(90deg,#0b7a75,#58aaa2)" }} /></div>
+              </td>
+              <td>{job.row_count.toLocaleString()}</td>
+              <td>{job.imported_rows.toLocaleString()}</td>
+              <td>{job.rejected_rows.toLocaleString()}</td>
+              <td>{job.completed_at ? new Date(job.completed_at).toLocaleString() : "Still running"}</td>
+              <td><button className="btn btn-soft" onClick={(event) => { event.stopPropagation(); setSelectedJob(job); }}>View status</button></td>
+            </tr>;
+          })}</tbody>
+        </table>
+        {!jobs.length && <div className="empty-page" style={{ boxShadow: "none" }}><div className="empty-icon"><FileSpreadsheet size={25}/></div><h2>No import reports yet</h2><p>Once a lead-ready list is imported, progress and completion details will appear here even after completion.</p></div>}
+      </div>
     </div>
-    <div className="table-wrap">
-      <table className="data-table">
-        <thead><tr><th>Import</th><th>Company</th><th>Branch</th><th>Status</th><th>Progress</th><th>Rows uploaded</th><th>Rows processed</th><th>Rejected</th><th>Completed</th></tr></thead>
-        <tbody>{jobs.map((job) => {
-          const progress = Math.max(0, Math.min(100, job.progress || 0));
-          return <tr key={job.id}>
-            <td><strong>{job.original_name}</strong><div style={{ fontSize: 8, color: "#82918f", marginTop: 3 }}>{job.id}</div></td>
-            <td>{companyById[job.company_id]?.name ?? "Unknown"}</td>
-            <td>{job.branch_id ? branchById[job.branch_id]?.name ?? "Unknown" : "Company-wide"}</td>
-            <td><span className={`badge ${job.status === "completed" ? "standard" : job.status === "failed" ? "missing" : "high"}`}>{job.status}</span></td>
-            <td style={{ minWidth: 130 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 8, color: "#617471", marginBottom: 5 }}><span>{progress}%</span><span>{job.imported_rows.toLocaleString()} / {job.row_count.toLocaleString()}</span></div>
-              <div style={{ height: 7, borderRadius: 999, background: "#dcebe8", overflow: "hidden" }}><div style={{ width: `${progress}%`, height: "100%", background: job.status === "failed" ? "#c9656c" : "linear-gradient(90deg,#0b7a75,#58aaa2)" }} /></div>
-            </td>
-            <td>{job.row_count.toLocaleString()}</td>
-            <td>{job.imported_rows.toLocaleString()}</td>
-            <td>{job.rejected_rows.toLocaleString()}</td>
-            <td>{job.completed_at ? new Date(job.completed_at).toLocaleString() : "Still running"}</td>
-          </tr>;
-        })}</tbody>
-      </table>
-      {!jobs.length && <div className="empty-page" style={{ boxShadow: "none" }}><div className="empty-icon"><FileSpreadsheet size={25}/></div><h2>No import reports yet</h2><p>Once a lead-ready list is imported, progress and completion details will appear here.</p></div>}
+    {selectedJob && <ImportReportModal job={selectedJob} company={companyById[selectedJob.company_id]?.name ?? "Unknown"} branch={selectedJob.branch_id ? branchById[selectedJob.branch_id]?.name ?? "Unknown" : "Company-wide"} onClose={() => setSelectedJob(null)} />}
+  </>;
+}
+
+function ImportReportModal({ job, company, branch, onClose }: { job: ImportProgress; company: string; branch: string; onClose: () => void }) {
+  const warnings = Array.isArray(job.source_metadata?.warnings) ? job.source_metadata?.warnings as Array<{ row?: number; issues?: string[] }> : [];
+  const error = typeof job.source_metadata?.error === "string" ? job.source_metadata.error : "";
+  const mappings = job.source_metadata?.mappings && typeof job.source_metadata.mappings === "object" ? job.source_metadata.mappings as Record<string, unknown> : {};
+  const progress = Math.max(0, Math.min(100, job.progress || 0));
+  return <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal" onClick={(event) => event.stopPropagation()}>
+      <div className="modal-head"><strong>Import status report</strong><button className="icon-btn" onClick={onClose}>x</button></div>
+      <div className="modal-body">
+        <div className="lead-card" style={{ boxShadow: "none" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+            <div><strong style={{ fontFamily: "Manrope", fontSize: 13 }}>{job.original_name}</strong><p style={{ fontSize: 10, color: "#6d7f7c", marginTop: 4 }}>{company} - {branch}</p></div>
+            <span className={`badge ${job.status === "completed" ? "standard" : job.status === "failed" ? "missing" : "high"}`}>{job.status}</span>
+          </div>
+          <div style={{ height: 9, borderRadius: 999, background: "#dcebe8", overflow: "hidden", marginTop: 12 }}>
+            <div style={{ width: `${progress}%`, height: "100%", background: job.status === "failed" ? "#c9656c" : "linear-gradient(90deg,#0b7a75,#58aaa2)" }} />
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginTop: 12 }}>
+          <Metric label="Rows uploaded" value={job.row_count.toLocaleString()} />
+          <Metric label="Rows processed" value={job.imported_rows.toLocaleString()} />
+          <Metric label="Rejected / skipped" value={job.rejected_rows.toLocaleString()} />
+          <Metric label="Progress" value={`${progress}%`} />
+        </div>
+        {error && <div className="callout" style={{ background: "#fbe9ea", color: "#a84850", marginTop: 12 }}><ShieldAlert size={14}/><span>{error}</span></div>}
+        <div className="table-wrap" style={{ border: "1px solid #e5ecea", borderRadius: 12, marginTop: 12 }}>
+          <table className="data-table"><tbody>
+            <tr><th>Started</th><td>{new Date(job.created_at).toLocaleString()}</td></tr>
+            <tr><th>Completed</th><td>{job.completed_at ? new Date(job.completed_at).toLocaleString() : "Still running"}</td></tr>
+            <tr><th>Import batch</th><td>{job.id}</td></tr>
+            <tr><th>Uploaded file</th><td>{job.uploaded_file_id}</td></tr>
+          </tbody></table>
+        </div>
+        {Object.keys(mappings).length > 0 && <div className="lead-card" style={{ marginTop: 12, boxShadow: "none" }}>
+          <strong style={{ fontFamily: "Manrope", fontSize: 12 }}>Confirmed mappings</strong>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 8, marginTop: 10 }}>
+            {Object.entries(mappings).map(([target, source]) => <div key={target} style={{ fontSize: 9, color: "#5f716e" }}><strong>{target}</strong><br/>{String(source || "Not mapped")}</div>)}
+          </div>
+        </div>}
+        {warnings.length > 0 && <div className="callout" style={{ background: "#fff8e6", color: "#80611c", marginTop: 12, alignItems: "flex-start" }}><AlertTriangle size={14}/><span><strong>Warnings stored with this import:</strong><br/>{warnings.slice(0, 10).map((warning, index) => <span key={`${warning.row ?? index}-${index}`} style={{ display: "block", marginTop: 3 }}>Row {warning.row ?? "?"}: {(warning.issues ?? []).join(", ")}</span>)}</span></div>}
+      </div>
+      <div className="modal-actions"><button className="btn btn-primary" onClick={onClose}>Close report</button></div>
     </div>
   </div>;
 }

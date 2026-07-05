@@ -55,6 +55,15 @@ export interface Lead {
   sourceBatch: string;
 }
 
+export interface AssignableUser {
+  id: string;
+  name: string;
+  email: string;
+  role: "employee" | "manager";
+  companyId: string | null;
+  branchId: string | null;
+}
+
 export interface Metric {
   label: string;
   value: string;

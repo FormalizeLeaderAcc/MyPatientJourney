@@ -6,7 +6,7 @@ import {
   CloudUpload, FileBarChart, HeartHandshake, LayoutDashboard, ListChecks, LogOut, Menu, Network,
   Search, Settings, ShieldCheck, Sparkles, Stethoscope, Users, X
 } from "lucide-react";
-import type { Lead, Role } from "@/lib/types";
+import type { AssignableUser, Lead, Role } from "@/lib/types";
 import { Overview } from "./views/overview";
 import { LeadsView } from "./views/leads-view";
 import { UploadCentre } from "./views/upload-centre";
@@ -84,6 +84,7 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
   const [menuOpen, setMenuOpen] = useState(false);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [leadData, setLeadData] = useState<Lead[]>([]);
+  const [assignableUsers, setAssignableUsers] = useState<AssignableUser[]>([]);
   const [leadsLoading, setLeadsLoading] = useState(true);
   const [leadsError, setLeadsError] = useState("");
   const [toast, setToast] = useState("");
@@ -116,6 +117,17 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
       setLeadData([]);
     } finally {
       setLeadsLoading(false);
+    }
+  }, []);
+
+  const loadAssignableUsers = useCallback(async () => {
+    if (!isSupabaseConfigured) return;
+    try {
+      const response = await fetch("/api/allocations", { cache: "no-store" });
+      const result = await response.json();
+      if (response.ok) setAssignableUsers(result.users ?? []);
+    } catch {
+      setAssignableUsers([]);
     }
   }, []);
 
@@ -157,6 +169,7 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
   }, []);
 
   useEffect(() => { void loadLeads(); }, [loadLeads]);
+  useEffect(() => { if (role !== "employee") void loadAssignableUsers(); }, [role, loadAssignableUsers]);
 
   const flatNav = useMemo(() => roleNav[role].flatMap((section) => section.items), [role]);
   const activeLabel = flatNav.find((item) => item.id === active)?.label ?? "Dashboard";
@@ -184,13 +197,13 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
     if (["leads", "due", "callbacks", "completed", "allocation", "campaigns", "review"].includes(active)) return <>
       {leadsError && <div className="callout" style={{ background: "#fbe9ea", color: "#a84850", marginBottom: 14 }}><ShieldCheck size={14} /><span>{leadsError}</span></div>}
       {leadsLoading && <div className="callout" style={{ marginBottom: 14 }}><ShieldCheck size={14} /><span>Loading live patient journeys from Supabase...</span></div>}
-      <LeadsView role={role} mode={active} leads={leadData} onLead={setSelectedLead} notify={notify} />
+      <LeadsView role={role} mode={active} leads={leadData} assignableUsers={assignableUsers} onLead={setSelectedLead} notify={notify} onRefresh={loadLeads} />
     </>;
     if (active === "upload") return <UploadCentre notify={notify} onImported={loadLeads} />;
     if (active === "verification") return <BookingVerification leads={leadData} notify={notify} onUpdate={updateLead} />;
     if (active === "companies" || active === "branches" || active === "users") return <CompaniesView mode={active} notify={notify} />;
     if (active === "medical-aid") return <MedicalAidView notify={notify} />;
-    if (active === "team") return <TeamActivity />;
+    if (active === "team") return <TeamActivity onNavigate={navigate} />;
     if (active === "settings") return <AccountSettingsView user={user} onUserUpdate={updateCurrentUser} notify={notify} />;
     return <PlaceholderView title={activeLabel} role={role} />;
   }
@@ -214,8 +227,8 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
         <header className="topbar">
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}><button aria-label={menuOpen ? "Close navigation" : "Open navigation"} className="icon-btn mobile-menu" onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? <X size={17} /> : <Menu size={17} />}</button><div className="crumb">MyPatient Journey &nbsp;/&nbsp; <strong>{activeLabel}</strong></div></div>
           <div className="top-actions">
-            <button className="icon-btn" aria-label="Search"><Search size={16} /></button>
-            <button className="icon-btn" aria-label="Notifications"><Bell size={16} /></button>
+            <button className="icon-btn" aria-label="Search" onClick={() => notify("Use the search box inside the current page to find patients, employees, companies or reports.")}><Search size={16} /></button>
+            <button className="icon-btn" aria-label="Notifications" onClick={() => notify("Notification centre is not connected yet. Critical import and allocation messages appear inside each workspace for now.")}><Bell size={16} /></button>
             {user.avatarUrl ? <img alt="Profile" src={user.avatarUrl} style={{ width: 34, height: 34, borderRadius: 12, objectFit: "cover" }} /> : <div className="avatar">{user.initials}</div>}
           </div>
         </header>

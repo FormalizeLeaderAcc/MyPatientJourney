@@ -1,7 +1,7 @@
 import { Search, Users } from "lucide-react";
 
-export function TeamActivity() {
-  return <><div className="page-head"><div><h1>Team activity</h1><p>Real contact effort, patient outcomes and conversion quality across your branch.</p></div><button className="btn btn-primary"><Users size={14}/>Manage allocation</button></div>
+export function TeamActivity({ onNavigate }: { onNavigate?: (page: string) => void }) {
+  return <><div className="page-head"><div><h1>Team activity</h1><p>Real contact effort, patient outcomes and conversion quality across your branch.</p></div><button className="btn btn-primary" onClick={() => onNavigate?.("allocation")}><Users size={14}/>Manage allocation</button></div>
   <div className="metric-grid" style={{gridTemplateColumns:"repeat(4,1fr)"}}>{[["Team members","0","Invite users first"],["Contact attempts today","0","No activity yet"],["WhatsApps sent","0","No messages recorded"],["Verified bookings","0","No bookings verified"]].map((row,i)=><div className={`metric-card ${["teal","blue","violet","orange"][i]}`} key={row[0]}><div className="metric-label">{row[0]}</div><div className="metric-value">{row[1]}</div><div className="metric-trend">{row[2]}</div></div>)}</div>
   <div className="toolbar"><div className="searchbar"><Search size={14}/><input placeholder="Search employee..."/></div><select className="select"><option>This month</option><option>This week</option><option>Today</option></select></div>
   <div className="card"><div className="card-head"><div><div className="card-title">Employee performance</div><div className="card-sub">All activity is sourced from immutable patient journey events</div></div></div><div className="empty-page" style={{ boxShadow: "none" }}><div className="empty-icon"><Users size={25}/></div><h2>No employee activity yet</h2><p>Invite employees and allocate live recall leads to start measuring productivity.</p></div></div></>;

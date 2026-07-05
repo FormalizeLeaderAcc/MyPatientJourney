@@ -31,6 +31,7 @@ type ImportProgressRow = {
   status: string;
   imported_rows: number | null;
   rejected_rows: number | null;
+  source_metadata: Record<string, unknown> | null;
   completed_at: string | null;
   created_at: string;
   uploaded_files: Array<{
@@ -478,16 +479,15 @@ export async function GET(request: NextRequest) {
   try {
     const { admin } = await getActor(request, supabaseUrl, anonKey, serviceRoleKey);
     const companyId = request.nextUrl.searchParams.get("company_id");
-    const recentCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const limit = Math.max(1, Math.min(Number(request.nextUrl.searchParams.get("limit") ?? 100), 250));
     let query = admin
       .from("import_batches")
       .select(`
-        id,status,imported_rows,rejected_rows,completed_at,created_at,
+        id,status,imported_rows,rejected_rows,source_metadata,completed_at,created_at,
         uploaded_files(id,company_id,branch_id,upload_type,original_name,row_count,created_at)
       `)
-      .gte("created_at", recentCutoff)
       .order("created_at", { ascending: false })
-      .limit(15);
+      .limit(limit);
     if (companyId) query = query.eq("uploaded_files.company_id", companyId);
     const { data, error } = await query;
     if (error) throw new Error(error.message);
@@ -506,6 +506,7 @@ export async function GET(request: NextRequest) {
           progress: item.status === "completed" ? 100 : progressPercent(importedRows, rowCount),
           completed_at: item.completed_at,
           created_at: item.created_at,
+          source_metadata: item.source_metadata ?? {},
           uploaded_file_id: item.uploaded_files?.id,
           company_id: item.uploaded_files?.company_id,
           branch_id: item.uploaded_files?.branch_id,
