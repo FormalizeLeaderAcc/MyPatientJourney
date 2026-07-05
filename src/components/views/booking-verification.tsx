@@ -1,0 +1,24 @@
+"use client";
+
+import { useState } from "react";
+import { CalendarCheck, CalendarX2, Check, ChevronRight, Clock3, Search, ShieldCheck } from "lucide-react";
+import type { Lead } from "@/lib/types";
+
+export function BookingVerification({ leads, notify, onUpdate }: { leads: Lead[]; notify: (message: string) => void; onUpdate: (lead: Lead) => void }) {
+  const pending = leads.filter((lead) => lead.status === "Booking Recorded Pending Verification");
+  const demo = pending.length ? pending : [leads[5]];
+  const [selected, setSelected] = useState<Lead | null>(null);
+  const [outcome, setOutcome] = useState("Booking found on practice calendar");
+  function verify() {
+    if (!selected) return;
+    if (outcome === "Booking found on practice calendar") onUpdate({ ...selected, status: "Patient Booked and Verified", latestOutcome: "Booking verified by manager", nextAction: "Completed" });
+    notify(`${selected.patient}: ${outcome}`); setSelected(null);
+  }
+  return <>
+    <div className="page-head"><div><h1>Booking verification</h1><p>Compare recorded patient requests against the official practice calendar.</p></div><button className="btn btn-secondary"><CalendarCheck size={14} />Calendar check guide</button></div>
+    <div className="metric-grid" style={{gridTemplateColumns:"repeat(4,1fr)"}}>{[["Awaiting verification","14","6 added today"],["Verified this month","37","91.4% authenticity"],["Not found","4","Needs follow-up"],["Average verification time","3.2h","Within 8h target"]].map((row,i)=><div className={`metric-card ${["orange","teal","rose","blue"][i]}`} key={row[0]}><div className="metric-label">{row[0]}</div><div className="metric-value">{row[1]}</div><div className="metric-trend">{row[2]}</div></div>)}</div>
+    <div className="toolbar"><div className="searchbar"><Search size={14}/><input placeholder="Search patient or account…" /></div><select className="select"><option>All employees</option><option>Naledi Mokoena</option><option>Karabo Letsoalo</option></select><select className="select"><option>Oldest first</option><option>Newest first</option></select></div>
+    <div className="card"><div className="card-head"><div><div className="card-title">Bookings awaiting a calendar check</div><div className="card-sub">Employee-recorded requests remain pending until a manager verifies them</div></div></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Patient</th><th>Recorded by</th><th>Preferred date</th><th>Preferred time</th><th>Confidence</th><th>Recorded</th><th></th></tr></thead><tbody>{demo.concat(demo.map(x=>({...x,id:x.id+"b",patient:"Boitumelo Kgopa",initials:"BK"}))).map((lead,i)=><tr key={lead.id}><td><strong>{lead.patient}</strong><br/><small>{lead.account}</small></td><td>{lead.assignedTo}</td><td><strong>{i ? "14 Jul 2026" : "12 Jul 2026"}</strong></td><td>{i ? "Morning" : "10:00–12:00"}</td><td><span className="badge standard">{i ? "Requested availability" : "Confirmed with patient"}</span></td><td>{i ? "31 min ago" : "2 hrs ago"}</td><td><button className="btn btn-soft" onClick={()=>setSelected(lead)}>Verify <ChevronRight size={12}/></button></td></tr>)}</tbody></table></div></div>
+    {selected && <div className="modal-backdrop" onClick={()=>setSelected(null)}><div className="modal" onClick={e=>e.stopPropagation()}><div className="modal-head"><strong>Verify booking · {selected.patient}</strong><button className="icon-btn" onClick={()=>setSelected(null)}>×</button></div><div className="modal-body"><div className="callout"><ShieldCheck size={15}/><span>Check the official practice calendar before choosing an outcome. This creates a manager-signed audit record.</span></div><div className="info-grid" style={{padding:"10px 0 20px"}}><div className="info-item"><label>Preferred date</label><strong>12 Jul 2026</strong></div><div className="info-item"><label>Preferred time</label><strong>10:00–12:00</strong></div><div className="info-item"><label>Recorded by</label><strong>{selected.assignedTo}</strong></div></div><div className="form-field"><label>Verification outcome</label><select className="form-control" value={outcome} onChange={e=>setOutcome(e.target.value)}><option>Booking found on practice calendar</option><option>Booking not found</option><option>Booking date changed</option><option>Patient cancelled</option><option>Needs follow-up</option></select></div><div className="form-field" style={{marginTop:12}}><label>Manager verification notes</label><textarea className="form-control" placeholder="Calendar reference, changed date, or follow-up detail…" /></div></div><div className="modal-actions"><button className="btn btn-secondary" onClick={()=>setSelected(null)}>Cancel</button><button className="btn btn-primary" onClick={verify}><Check size={14}/>Save verification</button></div></div></div>}
+  </>;
+}
