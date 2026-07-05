@@ -28,7 +28,7 @@ export function LeadsView({ role, mode, leads, onLead, notify }: { role: Role; m
     <div className="toolbar">
       <div className="searchbar"><Search size={14} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search patient, account or phone…" /></div>
       <select className="select" value={filter} onChange={(e) => setFilter(e.target.value)}><option>All priorities</option><option>Premium</option><option>High</option><option>Dormant</option><option>Missing</option></select>
-      <select className="select"><option>All branches</option><option>Polokwane Central</option><option>Seshego</option><option>Mankweng</option></select>
+      <select className="select"><option>All branches</option></select>
       <button className="icon-btn"><SlidersHorizontal size={14} /></button>
     </div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,fontSize:9,color:"#859593"}}><span><strong style={{color:"#263f3d"}}>{visible.length}</strong> patient journeys shown</span>{mode === "allocation" && <button className="btn btn-soft"><Shuffle size={13} />Auto-balance allocation</button>}</div>
@@ -37,6 +37,6 @@ export function LeadsView({ role, mode, leads, onLead, notify }: { role: Role; m
       <div className="patient-cell"><div className="avatar">{lead.initials}</div><div><div className="patient-name">{lead.patient}</div><div className="patient-meta">{lead.account} · {lead.phone}</div></div></div>
       <div className="lead-detail-grid"><div><label>Medical aid</label><span>{lead.medicalAid}</span></div><div><label>Option</label><span>{lead.option}</span></div><div><label>Last 8101</label><span>{lead.last8101}</span></div><div><label>Last 8159</label><span>{lead.last8159}</span></div></div>
       <div className="lead-card-foot"><div><div style={{fontSize:8,color:"#91a09e",marginBottom:5}}>ATTEMPTS · {lead.attempts}/3 days</div><div className="attempt-dots">{[0,1,2].map((i)=><i key={i} className={i < lead.attemptDays ? "hit" : ""} />)}</div></div><div style={{textAlign:"right"}}><strong style={{fontSize:9}}>{lead.nextAction}</strong><div style={{fontSize:8,color:"#8b9b99",marginTop:4}}>{lead.latestOutcome} <ChevronRight size={10} style={{verticalAlign:-2}} /></div></div></div>
-    </article>)}</div> : <div className="card empty-page"><div className="empty-icon"><Filter size={25} /></div><h2>No journeys match</h2><p>Try a different priority, branch or search term.</p></div>}
+    </article>)}</div> : <div className="card empty-page"><div className="empty-icon"><Filter size={25} /></div><h2>No live patient journeys yet</h2><p>{mode === "allocation" ? "Upload and generate recall leads before allocating work to employees." : "Once real leads are generated and assigned, they will appear here."}</p></div>}
   </>;
 }

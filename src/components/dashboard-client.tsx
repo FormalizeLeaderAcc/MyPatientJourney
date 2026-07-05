@@ -1,13 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  Activity, BarChart3, Bell, Building2, CalendarCheck, CalendarClock, ChevronDown, ClipboardCheck,
+  Activity, Bell, Building2, CalendarCheck, CalendarClock, ChevronDown, ClipboardCheck,
   CloudUpload, FileBarChart, HeartHandshake, LayoutDashboard, ListChecks, LogOut, Menu, Network,
   Search, Settings, ShieldCheck, Sparkles, Stethoscope, Users, X
 } from "lucide-react";
 import type { Lead, Role } from "@/lib/types";
-import { demoUsers, leads as initialLeads } from "@/lib/mock-data";
 import { Overview } from "./views/overview";
 import { LeadsView } from "./views/leads-view";
 import { UploadCentre } from "./views/upload-centre";
@@ -19,7 +18,8 @@ import { PlaceholderView } from "./views/placeholder-view";
 import { LeadDrawer } from "./lead-drawer";
 import { createSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client";
 
-type NavItem = { id: string; label: string; icon: typeof Activity; count?: number };
+type NavItem = { id: string; label: string; icon: typeof Activity };
+type CurrentUser = { name: string; roleLabel: string; email: string; initials: string; workspace: string };
 
 const roleNav: Record<Role, { section: string; items: NavItem[] }[]> = {
   super: [
@@ -32,7 +32,7 @@ const roleNav: Record<Role, { section: string; items: NavItem[] }[]> = {
     { section: "Patient journeys", items: [
       { id: "upload", label: "Upload Centre", icon: CloudUpload },
       { id: "campaigns", label: "Recall Campaigns", icon: HeartHandshake },
-      { id: "allocation", label: "Lead Allocation", icon: ListChecks, count: 46 },
+      { id: "allocation", label: "Lead Allocation", icon: ListChecks },
       { id: "medical-aid", label: "Medical Aid Intelligence", icon: Sparkles },
     ]},
     { section: "Insights", items: [
@@ -45,38 +45,84 @@ const roleNav: Record<Role, { section: string; items: NavItem[] }[]> = {
       { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
       { id: "team", label: "Team Activity", icon: Users },
       { id: "leads", label: "Patient Journeys", icon: HeartHandshake },
-      { id: "verification", label: "Booking Verification", icon: CalendarCheck, count: 14 },
-      { id: "review", label: "Manager Review", icon: ClipboardCheck, count: 9 },
+      { id: "verification", label: "Booking Verification", icon: CalendarCheck },
+      { id: "review", label: "Manager Review", icon: ClipboardCheck },
       { id: "reports", label: "Reports", icon: FileBarChart },
     ]},
   ],
   employee: [
     { section: "My recall work", items: [
       { id: "dashboard", label: "My Dashboard", icon: LayoutDashboard },
-      { id: "leads", label: "My Leads", icon: HeartHandshake, count: 48 },
-      { id: "due", label: "Due Today", icon: CalendarClock, count: 12 },
-      { id: "callbacks", label: "Callbacks", icon: Activity, count: 3 },
+      { id: "leads", label: "My Leads", icon: HeartHandshake },
+      { id: "due", label: "Due Today", icon: CalendarClock },
+      { id: "callbacks", label: "Callbacks", icon: Activity },
       { id: "completed", label: "Completed", icon: ClipboardCheck },
     ]},
   ],
 };
+
+function initialsFrom(value: string) {
+  return value.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "MP";
+}
+
+function roleLabel(role: Role) {
+  if (role === "super") return "Super User";
+  if (role === "manager") return "Manager";
+  return "Patient Care Coordinator";
+}
 
 export default function DashboardClient({ initialRole }: { initialRole: Role }) {
   const [role, setRole] = useState<Role>(initialRole);
   const [active, setActive] = useState("dashboard");
   const [menuOpen, setMenuOpen] = useState(false);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
-  const [leadData, setLeadData] = useState(initialLeads);
+  const [leadData, setLeadData] = useState<Lead[]>([]);
   const [toast, setToast] = useState("");
-  const user = demoUsers[role];
+  const [user, setUser] = useState<CurrentUser>({
+    name: "MyPatient Journey User",
+    roleLabel: roleLabel(initialRole),
+    email: "",
+    initials: "MP",
+    workspace: initialRole === "super" ? "All organisations" : "Assigned workspace",
+  });
+
+  useEffect(() => {
+    async function loadIdentity() {
+      if (!isSupabaseConfigured) return;
+      const supabase = createSupabaseBrowserClient();
+      const { data: authData } = await supabase.auth.getUser();
+      if (!authData.user) return;
+
+      const { data: profile } = await supabase
+        .from("users")
+        .select("full_name,email,company_id,branch_id")
+        .eq("id", authData.user.id)
+        .maybeSingle();
+      const { data: roleRows } = await supabase.from("user_roles").select("role").eq("user_id", authData.user.id);
+      const nextRole: Role = roleRows?.some((row) => row.role === "super_user")
+        ? "super"
+        : roleRows?.some((row) => row.role === "manager")
+          ? "manager"
+          : "employee";
+
+      const displayName = profile?.full_name || authData.user.user_metadata?.full_name || authData.user.email || "MyPatient Journey User";
+      setRole(nextRole);
+      document.cookie = `mpj_role=${nextRole}; path=/; max-age=86400; SameSite=Lax; Secure`;
+      setUser({
+        name: displayName,
+        roleLabel: roleLabel(nextRole),
+        email: profile?.email || authData.user.email || "",
+        initials: initialsFrom(displayName),
+        workspace: nextRole === "super" ? "All organisations" : "Assigned workspace",
+      });
+    }
+
+    void loadIdentity();
+  }, []);
 
   const flatNav = useMemo(() => roleNav[role].flatMap((section) => section.items), [role]);
   const activeLabel = flatNav.find((item) => item.id === active)?.label ?? "Dashboard";
 
-  function switchRole(next: Role) {
-    setRole(next); setActive("dashboard");
-    document.cookie = `mpj_demo_session=${next}; path=/; max-age=86400; SameSite=Lax`;
-  }
   function navigate(id: string) { setActive(id); setMenuOpen(false); }
   function notify(message: string) { setToast(message); window.setTimeout(() => setToast(""), 3200); }
   function updateLead(next: Lead) {
@@ -85,13 +131,12 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
   }
   async function logout() {
     if (isSupabaseConfigured) await createSupabaseBrowserClient().auth.signOut();
-    document.cookie = "mpj_demo_session=; path=/; max-age=0";
     document.cookie = "mpj_role=; path=/; max-age=0";
     window.location.href = "/login";
   }
 
   function renderView() {
-    if (active === "dashboard") return <Overview role={role} leads={leadData} onLead={setSelectedLead} onNavigate={navigate} />;
+    if (active === "dashboard") return <Overview role={role} userName={user.name} leads={leadData} onLead={setSelectedLead} onNavigate={navigate} />;
     if (["leads", "due", "callbacks", "completed", "allocation", "campaigns", "review"].includes(active)) return <LeadsView role={role} mode={active} leads={leadData} onLead={setSelectedLead} notify={notify} />;
     if (active === "upload") return <UploadCentre notify={notify} />;
     if (active === "verification") return <BookingVerification leads={leadData} notify={notify} onUpdate={updateLead} />;
@@ -106,10 +151,10 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
       {menuOpen && <div className="drawer-backdrop" style={{ zIndex: 35 }} onClick={() => setMenuOpen(false)} />}
       <aside className={`sidebar ${menuOpen ? "open" : ""}`}>
         <div className="brand"><div className="brand-mark"><Stethoscope size={19} /></div><div className="brand-word">MyPatient Journey</div></div>
-        <div className="workspace-chip"><span>Current workspace</span><strong>{role === "super" ? "All organisations" : "Dr KY Sepeng Inc"}<ChevronDown size={13} /></strong></div>
+        <div className="workspace-chip"><span>Current workspace</span><strong>{user.workspace}<ChevronDown size={13} /></strong></div>
         {roleNav[role].map((section) => <div key={section.section}>
           <div className="nav-section">{section.section}</div>
-          <nav className="nav-list">{section.items.map((item) => <button key={item.id} className={`nav-item ${active === item.id ? "active" : ""}`} onClick={() => navigate(item.id)}><item.icon size={16} strokeWidth={1.8} /><span>{item.label}</span>{item.count ? <span className="count">{item.count}</span> : null}</button>)}</nav>
+          <nav className="nav-list">{section.items.map((item) => <button key={item.id} className={`nav-item ${active === item.id ? "active" : ""}`} onClick={() => navigate(item.id)}><item.icon size={16} strokeWidth={1.8} /><span>{item.label}</span></button>)}</nav>
         </div>)}
         <div className="sidebar-footer">
           <div className="user-mini"><div className="avatar">{user.initials}</div><div><strong>{user.name}</strong><span>{user.roleLabel}</span></div><button aria-label="Sign out" onClick={logout} className="nav-item" style={{ marginLeft: "auto", width: 32, padding: 8 }}><LogOut size={14} /></button></div>
@@ -120,9 +165,8 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
         <header className="topbar">
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}><button aria-label={menuOpen ? "Close navigation" : "Open navigation"} className="icon-btn mobile-menu" onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? <X size={17} /> : <Menu size={17} />}</button><div className="crumb">MyPatient Journey &nbsp;/&nbsp; <strong>{activeLabel}</strong></div></div>
           <div className="top-actions">
-            <select aria-label="Switch demo role" className="role-switch" value={role} onChange={(e) => switchRole(e.target.value as Role)}><option value="employee">Employee demo</option><option value="manager">Manager demo</option><option value="super">Super User demo</option></select>
             <button className="icon-btn" aria-label="Search"><Search size={16} /></button>
-            <button className="icon-btn" aria-label="Notifications"><Bell size={16} /><span className="dot" /></button>
+            <button className="icon-btn" aria-label="Notifications"><Bell size={16} /></button>
             <div className="avatar">{user.initials}</div>
           </div>
         </header>

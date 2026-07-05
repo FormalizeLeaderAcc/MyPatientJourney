@@ -1,83 +1,82 @@
-import { ArrowRight, CalendarCheck, CheckCircle2, ChevronRight, CircleAlert, Clock3, FileSpreadsheet, PhoneCall, Send, Sparkles, UserRoundCheck } from "lucide-react";
+import { ArrowRight, BarChart3, CalendarCheck, CircleAlert, FileSpreadsheet, PhoneCall, Sparkles, UserRoundCheck } from "lucide-react";
 import type { Lead, Metric, Role } from "@/lib/types";
-import { auditEvents, employeeMetrics, managerMetrics, superMetrics, team } from "@/lib/mock-data";
 
 function Metrics({ items }: { items: Metric[] }) {
   return <div className="metric-grid">{items.map((item) => <div className={`metric-card ${item.tone}`} key={item.label}><div className="metric-label">{item.label}</div><div className="metric-value">{item.value}</div><div className="metric-trend">{item.trend}</div></div>)}</div>;
 }
 
-function priorityClass(priority: string) {
-  if (priority.includes("Premium")) return "premium";
-  if (priority.includes("High")) return "high";
-  if (priority.includes("Dormant")) return "dormant";
-  if (priority.includes("Missing")) return "missing";
-  return "standard";
-}
-
-function statusClass(status: string) {
-  if (status === "Callback Due" || status === "No Answer") return "due";
-  if (status.includes("Pending")) return "pending";
-  if (status.includes("Review")) return "review";
-  if (status === "New") return "new";
-  return "";
+function EmptyCard({ title, body, action, onAction }: { title: string; body: string; action?: string; onAction?: () => void }) {
+  return <div className="card empty-page"><div className="empty-icon"><Sparkles size={25} /></div><h2>{title}</h2><p>{body}</p>{action && <button className="btn btn-soft" onClick={onAction}>{action}</button>}</div>;
 }
 
 function LeadRows({ leads, onLead }: { leads: Lead[]; onLead: (lead: Lead) => void }) {
+  if (!leads.length) return <EmptyCard title="No patient journeys yet" body="Once leads are generated and allocated, the next patients to support will appear here." />;
   return <div className="lead-list">{leads.slice(0, 5).map((lead) => <div className="lead-row" key={lead.id} onClick={() => onLead(lead)}>
     <div className="patient-cell"><div className="avatar">{lead.initials}</div><div style={{ minWidth: 0 }}><div className="patient-name">{lead.patient}</div><div className="patient-meta">{lead.account} · {lead.branch}</div></div></div>
-    <div className="priority-stack"><strong className={`badge ${priorityClass(lead.priority)}`}>{lead.priority}</strong><span>{lead.medicalAid} · {lead.option}</span></div>
+    <div className="priority-stack"><strong className="badge standard">{lead.priority}</strong><span>{lead.medicalAid} · {lead.option}</span></div>
     <div className="next-action"><strong>{lead.nextAction}</strong><span>{lead.latestOutcome}</span></div>
-    <span className={`badge status-badge ${statusClass(lead.status)}`}>{lead.status === "Booking Recorded Pending Verification" ? "Pending verify" : lead.status}</span>
-    <ChevronRight size={14} color="#91a09e" />
   </div>)}</div>;
 }
 
 function ActivityPanel() {
+  const events: { action: string; subject: string; by: string; time: string }[] = [];
   const icons = [CalendarCheck, Sparkles, UserRoundCheck, FileSpreadsheet];
-  return <div className="card"><div className="card-head"><div><div className="card-title">Live activity</div><div className="card-sub">Latest across your workspace</div></div><button className="tiny-link">View audit log</button></div><div className="card-body" style={{ paddingTop: 4, paddingBottom: 4 }}><div className="activity-list">{auditEvents.map((event, i) => { const Icon = icons[i]; return <div className="activity" key={event.subject}><div className="activity-icon"><Icon size={13} /></div><div><strong>{event.action}</strong><p>{event.subject}</p><small>{event.by} · {event.time}</small></div></div>; })}</div></div></div>;
+  return <div className="card"><div className="card-head"><div><div className="card-title">Live activity</div><div className="card-sub">Latest across your workspace</div></div></div><div className="card-body" style={{ paddingTop: 4, paddingBottom: 4 }}>{events.length ? <div className="activity-list">{events.map((event, i) => { const Icon = icons[i] ?? Sparkles; return <div className="activity" key={event.subject}><div className="activity-icon"><Icon size={13} /></div><div><strong>{event.action}</strong><p>{event.subject}</p><small>{event.by} · {event.time}</small></div></div>; })}</div> : <div className="empty-page" style={{ boxShadow: "none", padding: 28 }}><div className="empty-icon"><BarChart3 size={24} /></div><h2>No activity yet</h2><p>Audit events will appear after companies, users, uploads, lead actions, and booking verifications begin.</p></div>}</div></div>;
 }
 
 function ChartCard({ superMode = false }: { superMode?: boolean }) {
-  const data = superMode ? [[74,48],[88,60],[66,51],[96,71],[84,64],[100,77],[79,65]] : [[65,39],[78,46],[58,44],[92,62],[74,57],[100,74],[68,52]];
-  return <div className="card"><div className="card-head"><div><div className="card-title">{superMode ? "Recall performance" : "Patient contact momentum"}</div><div className="card-sub">Contacted patients and verified bookings · 7 days</div></div><div className="filter-tabs"><button className="filter-tab active">7 days</button><button className="filter-tab">30 days</button></div></div><div className="card-body"><div className="chart">{data.map((bars, i) => <div className="chart-col" key={i}><i className="bar teal" style={{ height: `${bars[0]}%` }} /><i className="bar pale" style={{ height: `${bars[1]}%` }} /><label>{["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][i]}</label></div>)}</div><div className="chart-legend"><span><i className="legend-dot" />Patients contacted</span><span><i className="legend-dot pale" />Bookings verified</span></div></div></div>;
+  return <div className="card"><div className="card-head"><div><div className="card-title">{superMode ? "Recall performance" : "Patient contact momentum"}</div><div className="card-sub">Live patient journey activity</div></div></div><div className="card-body"><div className="empty-page" style={{ boxShadow: "none", padding: 28 }}><div className="empty-icon"><BarChart3 size={24} /></div><h2>No trend data yet</h2><p>Charts will populate after the first live upload, allocation, contact attempt, and booking verification.</p></div></div></div>;
 }
 
-export function Overview({ role, leads, onLead, onNavigate }: { role: Role; leads: Lead[]; onLead: (lead: Lead) => void; onNavigate: (page: string) => void }) {
-  const metrics = role === "super" ? superMetrics : role === "manager" ? managerMetrics : employeeMetrics;
-  const title = role === "employee" ? "Good morning, Naledi" : role === "manager" ? "Branch overview" : "Organisation overview";
-  const sub = role === "employee" ? "Here’s where your patient follow-up needs attention today." : role === "manager" ? "Polokwane Central · Sunday, 5 July 2026" : "Continuity of care across all companies and branches.";
+export function Overview({ role, userName, leads, onLead, onNavigate }: { role: Role; userName: string; leads: Lead[]; onLead: (lead: Lead) => void; onNavigate: (page: string) => void }) {
+  const metrics: Metric[] = role === "super"
+    ? [
+      { label: "Companies", value: "0", trend: "Add your first client", tone: "teal" },
+      { label: "Branches", value: "0", trend: "Create branch workspaces", tone: "blue" },
+      { label: "Users", value: "0", trend: "Invite managers and employees", tone: "violet" },
+      { label: "Active leads", value: "0", trend: "Upload data to generate recalls", tone: "orange" },
+    ]
+    : role === "manager"
+      ? [
+        { label: "Allocated leads", value: "0", trend: "Awaiting allocation", tone: "teal" },
+        { label: "Pending verification", value: "0", trend: "No bookings recorded yet", tone: "orange" },
+        { label: "Overdue callbacks", value: "0", trend: "No callbacks scheduled", tone: "rose" },
+        { label: "Team activity", value: "0", trend: "No activity yet", tone: "blue" },
+      ]
+      : [
+        { label: "My active leads", value: "0", trend: "No leads allocated yet", tone: "teal" },
+        { label: "Due today", value: "0", trend: "Nothing due", tone: "blue" },
+        { label: "Callbacks", value: "0", trend: "No callbacks scheduled", tone: "violet" },
+        { label: "Bookings recorded", value: "0", trend: "No bookings yet", tone: "orange" },
+      ];
+  const title = role === "employee" ? `Welcome, ${userName.split(" ")[0] || "there"}` : role === "manager" ? "Branch overview" : "Organisation overview";
+  const sub = role === "employee" ? "Your allocated patient follow-ups will appear here." : role === "manager" ? "Live branch activity will appear after allocation starts." : "Start by adding a company, branch and team, then upload patient transaction data.";
   return <>
-    <div className="page-head"><div><h1>{title}</h1><p>{sub}</p></div><div className="head-actions">{role === "super" && <button className="btn btn-secondary" onClick={() => onNavigate("upload")}><FileSpreadsheet size={14} /><span>Import data</span></button>}<button className="btn btn-primary" onClick={() => onNavigate(role === "manager" ? "verification" : "leads")}><HeartIcon /><span>{role === "manager" ? "Verify bookings" : "Open recall work"}</span></button></div></div>
+    <div className="page-head"><div><h1>{title}</h1><p>{sub}</p></div><div className="head-actions">{role === "super" && <button className="btn btn-secondary" onClick={() => onNavigate("upload")}><FileSpreadsheet size={14} /><span>Import data</span></button>}<button className="btn btn-primary" onClick={() => onNavigate(role === "super" ? "companies" : role === "manager" ? "verification" : "leads")}><HeartIcon /><span>{role === "super" ? "Start setup" : role === "manager" ? "Verify bookings" : "Open recall work"}</span></button></div></div>
     <Metrics items={metrics} />
 
     {role === "employee" && <>
       <div className="dashboard-grid">
         <div className="card">
-          <div className="card-head"><div><div className="card-title">Next patients to support</div><div className="card-sub">Prioritised by due time, recall value and follow-up history</div></div><div className="filter-tabs"><button className="filter-tab active">Priority</button><button className="filter-tab">Due today</button></div></div>
+          <div className="card-head"><div><div className="card-title">Next patients to support</div><div className="card-sub">Allocated patient journeys</div></div></div>
           <LeadRows leads={leads} onLead={onLead} />
         </div>
-        <div className="card">
-          <div className="card-head"><div><div className="card-title">Weekly care goal</div><div className="card-sub">Verified patient bookings</div></div></div>
-          <div className="card-body"><div className="goal-wrap"><div className="goal-top"><div><strong>18</strong> <span>of 25</span></div><span>72% complete</span></div><div className="goal-bar"><i /></div><div className="goal-legend"><span>Mon, 29 Jun</span><span>Sun, 5 Jul</span></div></div><div className="attention"><div className="attention-icon"><CircleAlert size={15} /></div><div><strong>3 callbacks overdue</strong><span>Bring these patients back into view.</span></div><button className="tiny-link" onClick={() => onNavigate("callbacks")}>Review</button></div></div>
-        </div>
+        <EmptyCard title="No care goal yet" body="Weekly targets will be shown once your manager allocates live recall journeys." />
       </div>
       <div className="dashboard-grid"><ChartCard /><ActivityPanel /></div>
     </>}
 
     {role === "manager" && <>
-      <div className="dashboard-grid">
-        <ChartCard />
-        <div className="card">
-          <div className="card-head"><div><div className="card-title">Verification health</div><div className="card-sub">Booking authenticity · this month</div></div></div>
-          <div className="card-body"><div className="goal-wrap"><div className="goal-top"><div><strong>91.4%</strong></div><span>+2.8% vs June</span></div><div className="goal-bar"><i style={{ width: "91.4%" }} /></div></div><div className="attention"><div className="attention-icon"><Clock3 size={15} /></div><div><strong>14 awaiting verification</strong><span>Oldest recorded 22 hours ago.</span></div><button className="tiny-link" onClick={() => onNavigate("verification")}>Open</button></div></div>
-        </div>
-      </div>
-      <div className="card" style={{ marginBottom: 18 }}><div className="card-head"><div><div className="card-title">Employee productivity</div><div className="card-sub">Activity and verified care outcomes · this month</div></div><button className="tiny-link" onClick={() => onNavigate("team")}>Full team <ArrowRight size={10} /></button></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Employee</th><th>Allocated</th><th>Contacted</th><th>Attempts</th><th>WhatsApps</th><th>Bookings</th><th>Verified</th><th>Conversion</th></tr></thead><tbody>{team.map((member) => <tr key={member.name}><td><span className={`online ${member.status === "Away" ? "away" : ""}`} /><strong>{member.name}</strong></td><td>{member.allocated}</td><td>{member.contacted}</td><td>{member.attempts}</td><td>{member.whatsapp}</td><td>{member.recorded}</td><td>{member.verified}</td><td><strong>{member.conversion}</strong></td></tr>)}</tbody></table></div></div>
+      <div className="dashboard-grid"><ChartCard /><EmptyCard title="Nothing to verify yet" body="Employee-recorded bookings will appear here for manager verification." action="Open verification" onAction={() => onNavigate("verification")} /></div>
+      <EmptyCard title="No employee activity yet" body="Once employees are added and leads are allocated, productivity will appear here." action="View team activity" onAction={() => onNavigate("team")} />
     </>}
 
     {role === "super" && <>
       <div className="dashboard-grid"><ChartCard superMode /><ActivityPanel /></div>
-      <div className="dashboard-grid"><div className="card"><div className="card-head"><div><div className="card-title">Recall opportunities by branch</div><div className="card-sub">Generated, allocated and converted this month</div></div><button className="tiny-link">View report</button></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Branch</th><th>Company</th><th>Opportunities</th><th>Allocated</th><th>Verified</th><th>Conversion</th></tr></thead><tbody>{[["Polokwane Central","Dr KY Sepeng Inc","418","386","74","19.2%"],["Seshego","Dr KY Sepeng Inc","294","270","51","18.9%"],["Mankweng","Dr KY Sepeng Inc","236","221","38","17.2%"],["Burgersfort","Talane & Associates","322","288","42","14.6%"]].map(row => <tr key={row[0]}>{row.map((cell,i)=><td key={cell}>{i===0?<strong>{cell}</strong>:cell}</td>)}</tr>)}</tbody></table></div></div><div className="card"><div className="card-head"><div><div className="card-title">Medical aid quality</div><div className="card-sub">Active recall opportunities</div></div></div><div className="card-body">{[["Premium",398,"34%","#d3a243"],["High",426,"37%","#7656c9"],["Medium",245,"21%","#3b8fc1"],["Low / Unknown",92,"8%","#a9b8b5"]].map(row=><div key={row[0]} style={{display:"grid",gridTemplateColumns:"80px 1fr 32px",gap:10,alignItems:"center",marginBottom:16,fontSize:9}}><strong>{row[0]}</strong><div className="goal-bar"><i style={{width:String(row[2]),background:String(row[3])}} /></div><span>{row[2]}</span></div>)}</div></div></div>
+      <div className="dashboard-grid">
+        <EmptyCard title="No recall opportunities yet" body="Upload a transaction spreadsheet to generate the first traceable recall campaign." action="Open Upload Centre" onAction={() => onNavigate("upload")} />
+        <EmptyCard title="Medical aid scoring is empty" body="Configure schemes and options so priority scoring is driven by the database." action="Configure scoring" onAction={() => onNavigate("medical-aid")} />
+      </div>
     </>}
   </>;
 }

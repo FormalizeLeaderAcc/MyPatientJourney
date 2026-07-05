@@ -11,7 +11,7 @@ export function GET() {
     status: "ok",
     application: "MyPatient Journey",
     environment: process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? "unknown",
-    services: { supabase: supabaseConfigured ? "configured" : "demo-mode" },
+    services: { supabase: supabaseConfigured ? "configured" : "not-configured" },
     timestamp: new Date().toISOString(),
   });
 }
