@@ -100,12 +100,13 @@ function displayDate(value: string | null | undefined) {
 }
 
 function nextActionLabel(value: string | null | undefined, status: LeadStatus) {
-  if (status === "New") return "Ready to allocate";
-  if (!value) return "Next action not scheduled";
+  if (!value) return status === "New" ? "Ready to allocate" : "Next action not scheduled";
   const today = new Date().toISOString().slice(0, 10);
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   const day = date.toISOString().slice(0, 10);
+  if (day > today) return day;
+  if (status === "New") return "Ready to allocate";
   if (day < today) return "Overdue";
   if (day === today) return "Due today";
   return day;
@@ -306,6 +307,10 @@ export async function GET(request: NextRequest) {
     const nextActionAt = refs.due_for_six_month_recall === false && ["New", "Allocated"].includes(status) && attempts.length === 0
       ? sixMonthRecallDate(lead.last_visit_date) ?? lead.next_action_at
       : lead.next_action_at;
+    const dynamicSixMonthDueDate = refs.due_for_six_month_recall === false ? sixMonthRecallDate(lead.last_visit_date) : null;
+    const recallReason = dynamicSixMonthDueDate && dynamicSixMonthDueDate.slice(0, 10) <= new Date().toISOString().slice(0, 10)
+      ? "Patient has now reached the six-month recall review window based on the last treatment date."
+      : lead.recall_reason;
 
     return {
       id: lead.id,
@@ -326,7 +331,7 @@ export async function GET(request: NextRequest) {
       lastVisit: displayDate(lead.last_visit_date),
       last8101: displayDate(lead.last_8101_date),
       last8159: displayDate(lead.last_8159_date),
-      reason: lead.recall_reason,
+      reason: recallReason,
       attempts: attempts.length,
       attemptDays: Math.max(lead.unsuccessful_attempt_days ?? 0, new Set(attempts.map((attempt) => contactDay(attempt.attempted_at))).size),
       nextAction: nextActionLabel(nextActionAt, status),

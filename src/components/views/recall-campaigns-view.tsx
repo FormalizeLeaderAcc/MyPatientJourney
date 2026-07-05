@@ -17,8 +17,6 @@ function addMonths(date: Date, months: number) {
 
 function isDueForFollowUp(lead: Lead) {
   if (!isActiveLead(lead)) return false;
-  const reason = lead.reason.toLowerCase();
-  if (reason.includes("not yet passed") || reason.includes("six-month review window")) return false;
 
   if (lead.lastVisit && lead.lastVisit !== "Not supplied") {
     const lastVisit = new Date(`${lead.lastVisit.slice(0, 10)}T00:00:00.000Z`);
