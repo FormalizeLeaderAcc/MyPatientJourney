@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Building2, Edit3, KeyRound, LoaderCircle, Plus, RotateCcw, Search, ShieldAlert, ShieldCheck, Trash2, UserX, Users } from "lucide-react";
+import type { Lead } from "@/lib/types";
 import { createSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client";
 
 type Company = { id: string; name: string; registration_number: string | null; is_active: boolean; created_at: string };
@@ -36,7 +37,9 @@ const statusStyles: Record<UserStatus, string> = {
   deleted: "missing",
 };
 
-export function CompaniesView({ mode, notify }: { mode:string; notify:(message:string)=>void }) {
+const finalLeadStatuses = new Set(["Patient Booked and Verified", "Patient Not Interested", "Wrong Number Confirmed"]);
+
+export function CompaniesView({ mode, notify, leads = [] }: { mode:string; notify:(message:string)=>void; leads?: Lead[] }) {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -101,7 +104,7 @@ export function CompaniesView({ mode, notify }: { mode:string; notify:(message:s
     setLoading(false);
   }
 
-  useEffect(() => { void loadData(); }, []);
+  useEffect(() => { void loadData(); }, [mode]);
 
   async function adminAction(payload: Record<string, unknown>) {
     setSaving(true);
@@ -185,6 +188,9 @@ export function CompaniesView({ mode, notify }: { mode:string; notify:(message:s
 
   const companyById = useMemo(() => Object.fromEntries(companies.map((company) => [company.id, company])), [companies]);
   const branchById = useMemo(() => Object.fromEntries(branches.map((branch) => [branch.id, branch])), [branches]);
+  const activeLeadCountForCompany = (companyId: string) => leads.filter((lead) => lead.companyId === companyId && !finalLeadStatuses.has(lead.status)).length;
+  const verifiedLeadCountForCompany = (companyId: string) => leads.filter((lead) => lead.companyId === companyId && lead.status === "Patient Booked and Verified").length;
+  const activeLeadCountForBranch = (branchId: string) => leads.filter((lead) => lead.branchId === branchId && !finalLeadStatuses.has(lead.status)).length;
   const filteredBranches = branches.filter((branch) => !query || `${branch.name} ${companyById[branch.company_id]?.name}`.toLowerCase().includes(query.toLowerCase()));
   const filteredUsers = users.filter((user) => !query || `${user.full_name} ${user.email}`.toLowerCase().includes(query.toLowerCase()));
   const activeReplacementUsers = users.filter((user) => user.id !== pendingAction?.user.id && user.is_active && (user.account_status ?? "active") === "active");
@@ -203,7 +209,7 @@ export function CompaniesView({ mode, notify }: { mode:string; notify:(message:s
           <div className="form-field full"><button className="btn btn-primary" disabled={saving}>{saving ? "Saving..." : "Create company"}</button></div>
         </div>
       </form>
-      {companies.length ? <div className="company-grid">{companies.map(company=><div className="card company-card" key={company.id}><div className="company-top"><div className="company-logo"><Building2 size={21}/></div><span className="badge standard">{company.is_active ? "Active" : "Inactive"}</span></div><h3>{company.name}</h3><p>{company.registration_number || "No registration details captured yet"}</p><div className="company-stats"><div className="company-stat"><strong>{branches.filter((branch) => branch.company_id === company.id).length}</strong><span>Branches</span></div><div className="company-stat"><strong>{users.filter((user) => user.company_id === company.id).length}</strong><span>Users</span></div><div className="company-stat"><strong>0</strong><span>Recall leads</span></div><div className="company-stat"><strong>0</strong><span>Verified</span></div></div><div className="company-footer"><span>Created {new Date(company.created_at).toLocaleDateString()}</span></div></div>)}</div> : <div className="card empty-page"><div className="empty-icon"><Building2 size={25}/></div><h2>No companies yet</h2><p>Add the first Formalize client company to begin live setup.</p></div>}
+      {companies.length ? <div className="company-grid">{companies.map(company=><div className="card company-card" key={company.id}><div className="company-top"><div className="company-logo"><Building2 size={21}/></div><span className="badge standard">{company.is_active ? "Active" : "Inactive"}</span></div><h3>{company.name}</h3><p>{company.registration_number || "No registration details captured yet"}</p><div className="company-stats"><div className="company-stat"><strong>{branches.filter((branch) => branch.company_id === company.id).length}</strong><span>Branches</span></div><div className="company-stat"><strong>{users.filter((user) => user.company_id === company.id).length}</strong><span>Users</span></div><div className="company-stat"><strong>{activeLeadCountForCompany(company.id).toLocaleString()}</strong><span>Active leads</span></div><div className="company-stat"><strong>{verifiedLeadCountForCompany(company.id).toLocaleString()}</strong><span>Verified</span></div></div><div className="company-footer"><span>Created {new Date(company.created_at).toLocaleDateString()}</span></div></div>)}</div> : <div className="card empty-page"><div className="empty-icon"><Building2 size={25}/></div><h2>No companies yet</h2><p>Add the first Formalize client company to begin live setup.</p></div>}
     </>}
 
     {!loading && mode === "branches" && <>
@@ -217,7 +223,7 @@ export function CompaniesView({ mode, notify }: { mode:string; notify:(message:s
         </div>
       </form>
       <div className="toolbar"><div className="searchbar"><Search size={14}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search branches..." /></div></div>
-      <div className="card"><div className="table-wrap"><table className="data-table"><thead><tr><th>Branch</th><th>Company</th><th>Phone</th><th>Users</th><th>Active leads</th><th>Status</th></tr></thead><tbody>{filteredBranches.map(branch=><tr key={branch.id}><td><strong>{branch.name}</strong></td><td>{companyById[branch.company_id]?.name ?? "Unknown company"}</td><td>{branch.practice_phone ?? "—"}</td><td>{users.filter((user) => user.branch_id === branch.id).length}</td><td>0</td><td><span className="badge standard">{branch.is_active ? "Active" : "Inactive"}</span></td></tr>)}</tbody></table>{!filteredBranches.length && <div className="empty-page" style={{ boxShadow: "none" }}><div className="empty-icon"><Building2 size={25}/></div><h2>No branches yet</h2><p>Create a company branch to start assigning managers and employees.</p></div>}</div></div>
+      <div className="card"><div className="table-wrap"><table className="data-table"><thead><tr><th>Branch</th><th>Company</th><th>Phone</th><th>Users</th><th>Active leads</th><th>Status</th></tr></thead><tbody>{filteredBranches.map(branch=><tr key={branch.id}><td><strong>{branch.name}</strong></td><td>{companyById[branch.company_id]?.name ?? "Unknown company"}</td><td>{branch.practice_phone ?? "—"}</td><td>{users.filter((user) => user.branch_id === branch.id).length}</td><td>{activeLeadCountForBranch(branch.id).toLocaleString()}</td><td><span className="badge standard">{branch.is_active ? "Active" : "Inactive"}</span></td></tr>)}</tbody></table>{!filteredBranches.length && <div className="empty-page" style={{ boxShadow: "none" }}><div className="empty-icon"><Building2 size={25}/></div><h2>No branches yet</h2><p>Create a company branch to start assigning managers and employees.</p></div>}</div></div>
     </>}
 
     {!loading && mode === "users" && <>

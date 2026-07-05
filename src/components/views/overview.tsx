@@ -1,6 +1,18 @@
 import { ArrowRight, BarChart3, CalendarCheck, CircleAlert, FileSpreadsheet, PhoneCall, Sparkles, UserRoundCheck } from "lucide-react";
 import type { Lead, Metric, Role } from "@/lib/types";
 
+type OverviewStats = {
+  companyCount?: number;
+  branchCount?: number;
+  userCount?: number;
+};
+
+const finalStatuses = new Set([
+  "Patient Booked and Verified",
+  "Patient Not Interested",
+  "Wrong Number Confirmed",
+]);
+
 function Metrics({ items }: { items: Metric[] }) {
   return <div className="metric-grid">{items.map((item) => <div className={`metric-card ${item.tone}`} key={item.label}><div className="metric-label">{item.label}</div><div className="metric-value">{item.value}</div><div className="metric-trend">{item.trend}</div></div>)}</div>;
 }
@@ -28,29 +40,36 @@ function ChartCard({ superMode = false }: { superMode?: boolean }) {
   return <div className="card"><div className="card-head"><div><div className="card-title">{superMode ? "Recall performance" : "Patient contact momentum"}</div><div className="card-sub">Live patient journey activity</div></div></div><div className="card-body"><div className="empty-page" style={{ boxShadow: "none", padding: 28 }}><div className="empty-icon"><BarChart3 size={24} /></div><h2>No trend data yet</h2><p>Charts will populate after the first live upload, allocation, contact attempt, and booking verification.</p></div></div></div>;
 }
 
-export function Overview({ role, userName, leads, onLead, onNavigate }: { role: Role; userName: string; leads: Lead[]; onLead: (lead: Lead) => void; onNavigate: (page: string) => void }) {
+export function Overview({ role, userName, leads, stats, onLead, onNavigate }: { role: Role; userName: string; leads: Lead[]; stats?: OverviewStats; onLead: (lead: Lead) => void; onNavigate: (page: string) => void }) {
+  const activeLeads = leads.filter((lead) => !finalStatuses.has(lead.status));
+  const pendingVerification = leads.filter((lead) => lead.status === "Booking Recorded Pending Verification");
+  const overdueCallbacks = activeLeads.filter((lead) => lead.nextAction === "Overdue");
+  const dueToday = activeLeads.filter((lead) => lead.nextAction === "Due today");
+  const callbackLeads = activeLeads.filter((lead) => ["Callback Due", "Call Back Later"].includes(lead.status));
+  const booked = leads.filter((lead) => ["Booking Recorded Pending Verification", "Patient Booked and Verified"].includes(lead.status));
+  const contacted = leads.filter((lead) => lead.attempts > 0);
   const metrics: Metric[] = role === "super"
     ? [
-      { label: "Companies", value: "0", trend: "Add your first client", tone: "teal" },
-      { label: "Branches", value: "0", trend: "Create branch workspaces", tone: "blue" },
-      { label: "Users", value: "0", trend: "Invite managers and employees", tone: "violet" },
-      { label: "Active leads", value: "0", trend: "Upload data to generate recalls", tone: "orange" },
+      { label: "Companies", value: String(stats?.companyCount ?? 0), trend: stats?.companyCount ? "Live client organisations" : "Add your first client", tone: "teal" },
+      { label: "Branches", value: String(stats?.branchCount ?? 0), trend: stats?.branchCount ? "Configured branch workspaces" : "Create branch workspaces", tone: "blue" },
+      { label: "Users", value: String(stats?.userCount ?? 0), trend: stats?.userCount ? "Active access records" : "Invite managers and employees", tone: "violet" },
+      { label: "Active leads", value: activeLeads.length.toLocaleString(), trend: activeLeads.length ? "Live recall journeys" : "Upload data to generate recalls", tone: "orange" },
     ]
     : role === "manager"
       ? [
-        { label: "Allocated leads", value: "0", trend: "Awaiting allocation", tone: "teal" },
-        { label: "Pending verification", value: "0", trend: "No bookings recorded yet", tone: "orange" },
-        { label: "Overdue callbacks", value: "0", trend: "No callbacks scheduled", tone: "rose" },
-        { label: "Team activity", value: "0", trend: "No activity yet", tone: "blue" },
+        { label: "Allocated leads", value: activeLeads.length.toLocaleString(), trend: activeLeads.length ? "Active branch journeys" : "Awaiting allocation", tone: "teal" },
+        { label: "Pending verification", value: pendingVerification.length.toLocaleString(), trend: pendingVerification.length ? "Needs calendar check" : "No bookings recorded yet", tone: "orange" },
+        { label: "Overdue callbacks", value: overdueCallbacks.length.toLocaleString(), trend: overdueCallbacks.length ? "Needs attention" : "No overdue callbacks", tone: "rose" },
+        { label: "Team activity", value: contacted.length.toLocaleString(), trend: contacted.length ? "Patients contacted" : "No activity yet", tone: "blue" },
       ]
       : [
-        { label: "My active leads", value: "0", trend: "No leads allocated yet", tone: "teal" },
-        { label: "Due today", value: "0", trend: "Nothing due", tone: "blue" },
-        { label: "Callbacks", value: "0", trend: "No callbacks scheduled", tone: "violet" },
-        { label: "Bookings recorded", value: "0", trend: "No bookings yet", tone: "orange" },
+        { label: "My active leads", value: activeLeads.length.toLocaleString(), trend: activeLeads.length ? "Allocated to you" : "No leads allocated yet", tone: "teal" },
+        { label: "Due today", value: dueToday.length.toLocaleString(), trend: dueToday.length ? "Open next patient" : "Nothing due", tone: "blue" },
+        { label: "Callbacks", value: callbackLeads.length.toLocaleString(), trend: callbackLeads.length ? "Scheduled follow-ups" : "No callbacks scheduled", tone: "violet" },
+        { label: "Bookings recorded", value: booked.length.toLocaleString(), trend: booked.length ? "Includes pending verification" : "No bookings yet", tone: "orange" },
       ];
   const title = role === "employee" ? `Welcome, ${userName.split(" ")[0] || "there"}` : role === "manager" ? "Branch overview" : "Organisation overview";
-  const sub = role === "employee" ? "Your allocated patient follow-ups will appear here." : role === "manager" ? "Live branch activity will appear after allocation starts." : "Start by adding a company, branch and team, then upload patient transaction data.";
+  const sub = role === "employee" ? "Your allocated patient follow-ups will appear here." : role === "manager" ? "Live branch activity, callbacks and booking checks across your team." : "Live organisation, upload and recall journey performance across Formalize clients.";
   return <>
     <div className="page-head"><div><h1>{title}</h1><p>{sub}</p></div><div className="head-actions">{role === "super" && <button className="btn btn-secondary" onClick={() => onNavigate("upload")}><FileSpreadsheet size={14} /><span>Import data</span></button>}<button className="btn btn-primary" onClick={() => onNavigate(role === "super" ? "companies" : role === "manager" ? "verification" : "leads")}><HeartIcon /><span>{role === "super" ? "Start setup" : role === "manager" ? "Verify bookings" : "Open recall work"}</span></button></div></div>
     <Metrics items={metrics} />

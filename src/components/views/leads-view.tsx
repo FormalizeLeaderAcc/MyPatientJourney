@@ -59,15 +59,16 @@ export function LeadsView({
   const title = mode === "due" ? "Due today" : mode === "callbacks" ? "Patient callbacks" : mode === "completed" ? "Completed journeys" : isAllocationMode ? "Lead allocation" : mode === "review" ? "Manager review" : role === "employee" ? "My patient leads" : "Patient recall journeys";
   const sub = mode === "allocation" ? "Balance patient opportunities across branches and care coordinators." : mode === "review" ? "Resolve journeys that need a manager's judgement or have reached three unsuccessful days." : "Find the next patient, understand their history, and keep their follow-up moving.";
   const allocationEligible = visible.filter((lead) => lead.assignedTo === "Unallocated" && !finalStatuses.includes(lead.status));
+  const displayedLeads = isAllocationMode && role !== "employee" ? allocationEligible : visible;
   const selectedEmployee = assignableUsers.find((user) => user.id === selectedEmployeeId);
 
   function exportVisibleLeads() {
-    if (!visible.length) {
+    if (!displayedLeads.length) {
       notify("There are no visible patient journeys to export.");
       return;
     }
     const headers = ["Patient Name", "Account Number", "Mobile Number", "Alternative Number", "Branch", "Medical Aid", "Option", "Priority", "Last Visit", "Last 8101", "Last 8159", "Status", "Assigned To", "Next Action", "Latest Outcome", "Source Batch"];
-    const rows = visible.map((lead) => [
+    const rows = displayedLeads.map((lead) => [
       lead.patient,
       lead.account,
       lead.phone,
@@ -92,7 +93,7 @@ export function LeadsView({
     anchor.download = `patient-journeys-${new Date().toISOString().slice(0, 10)}.csv`;
     anchor.click();
     URL.revokeObjectURL(url);
-    notify(`${visible.length.toLocaleString()} visible patient journey(s) exported.`);
+    notify(`${displayedLeads.length.toLocaleString()} visible patient journey(s) exported.`);
   }
 
   async function allocateVisibleLeads() {
@@ -134,7 +135,7 @@ export function LeadsView({
         void allocateVisibleLeads();
         return;
       }
-      const firstVisible = visible.find((lead) => !finalStatuses.includes(lead.status));
+      const firstVisible = displayedLeads.find((lead) => !finalStatuses.includes(lead.status));
       if (firstVisible) onLead(firstVisible);
       else notify("No active patient journey is visible in this view.");
       return;
@@ -180,8 +181,8 @@ export function LeadsView({
       <select className="select"><option>All branches</option></select>
       <button className="icon-btn"><SlidersHorizontal size={14} /></button>
     </div>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,fontSize:9,color:"#859593"}}><span><strong style={{color:"#263f3d"}}>{visible.length}</strong> patient journeys shown</span>{isAllocationMode && <button className="btn btn-soft" disabled={allocating || role === "employee"} onClick={allocateVisibleLeads}><Shuffle size={13} />Auto-balance allocation</button>}</div>
-    {visible.length ? <div className="lead-grid">{visible.map((lead) => <article className="lead-card" key={lead.id} onClick={() => onLead(lead)}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,fontSize:9,color:"#859593"}}><span><strong style={{color:"#263f3d"}}>{displayedLeads.length}</strong> {isAllocationMode && role !== "employee" ? "eligible unallocated patient journeys shown" : "patient journeys shown"}</span>{isAllocationMode && <button className="btn btn-soft" disabled={allocating || role === "employee"} onClick={allocateVisibleLeads}><Shuffle size={13} />Auto-balance allocation</button>}</div>
+    {displayedLeads.length ? <div className="lead-grid">{displayedLeads.map((lead) => <article className="lead-card" key={lead.id} onClick={() => onLead(lead)}>
       <div className="lead-card-top"><span className={`badge ${badgeClass(lead.priority)}`}>{lead.priority}</span><span className="badge status-badge">{lead.status}</span></div>
       <div className="patient-cell"><div className="avatar">{lead.initials}</div><div><div className="patient-name">{lead.patient}</div><div className="patient-meta">{lead.account} · {lead.phone || "Missing contact number"}</div></div></div>
       <div className="lead-detail-grid"><div><label>Medical aid</label><span>{lead.medicalAid}</span></div><div><label>Option</label><span>{lead.option}</span></div><div><label>Last 8101</label><span>{lead.last8101}</span></div><div><label>Last 8159</label><span>{lead.last8159}</span></div></div>

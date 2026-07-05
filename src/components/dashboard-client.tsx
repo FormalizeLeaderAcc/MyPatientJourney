@@ -17,11 +17,13 @@ import { TeamActivity } from "./views/team-activity";
 import { RecallCampaignsView } from "./views/recall-campaigns-view";
 import { PlaceholderView } from "./views/placeholder-view";
 import { AccountSettingsView } from "./views/account-settings-view";
+import { ReportsView } from "./views/reports-view";
 import { LeadDrawer } from "./lead-drawer";
 import { createSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client";
 
 type NavItem = { id: string; label: string; icon: typeof Activity };
 type CurrentUser = { name: string; roleLabel: string; email: string; initials: string; workspace: string; avatarUrl?: string | null; preferences?: Record<string, unknown> };
+type SetupStats = { companyCount: number; branchCount: number; userCount: number };
 
 const roleNav: Record<Role, { section: string; items: NavItem[] }[]> = {
   super: [
@@ -86,6 +88,7 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [leadData, setLeadData] = useState<Lead[]>([]);
   const [assignableUsers, setAssignableUsers] = useState<AssignableUser[]>([]);
+  const [setupStats, setSetupStats] = useState<SetupStats>({ companyCount: 0, branchCount: 0, userCount: 0 });
   const [leadsLoading, setLeadsLoading] = useState(true);
   const [leadsError, setLeadsError] = useState("");
   const [toast, setToast] = useState("");
@@ -129,6 +132,25 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
       if (response.ok) setAssignableUsers(result.users ?? []);
     } catch {
       setAssignableUsers([]);
+    }
+  }, []);
+
+  const loadSetupStats = useCallback(async () => {
+    if (!isSupabaseConfigured) return;
+    try {
+      const supabase = createSupabaseBrowserClient();
+      const [companyResult, branchResult, userResult] = await Promise.all([
+        supabase.from("companies").select("id", { count: "exact", head: true }),
+        supabase.from("branches").select("id", { count: "exact", head: true }),
+        supabase.from("users").select("id", { count: "exact", head: true }),
+      ]);
+      setSetupStats({
+        companyCount: companyResult.count ?? 0,
+        branchCount: branchResult.count ?? 0,
+        userCount: userResult.count ?? 0,
+      });
+    } catch {
+      setSetupStats({ companyCount: 0, branchCount: 0, userCount: 0 });
     }
   }, []);
 
@@ -176,6 +198,7 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
   }, []);
 
   useEffect(() => { void loadLeads(); }, [loadLeads]);
+  useEffect(() => { void loadSetupStats(); }, [loadSetupStats]);
   useEffect(() => { if (role !== "employee") void loadAssignableUsers(); }, [role, loadAssignableUsers]);
 
   const flatNav = useMemo(() => roleNav[role].flatMap((section) => section.items), [role]);
@@ -200,7 +223,7 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
   }
 
   function renderView() {
-    if (active === "dashboard") return <Overview role={role} userName={user.name} leads={leadData} onLead={setSelectedLead} onNavigate={navigate} />;
+    if (active === "dashboard") return <Overview role={role} userName={user.name} leads={leadData} stats={setupStats} onLead={setSelectedLead} onNavigate={navigate} />;
     if (active === "campaigns") return <RecallCampaignsView leads={leadData} onNavigate={navigate} />;
     if (["leads", "due", "callbacks", "completed", "allocation", "review"].includes(active)) return <>
       {leadsError && <div className="callout" style={{ background: "#fbe9ea", color: "#a84850", marginBottom: 14 }}><ShieldCheck size={14} /><span>{leadsError}</span></div>}
@@ -208,10 +231,11 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
       <LeadsView role={role} mode={active} leads={leadData} assignableUsers={assignableUsers} onLead={setSelectedLead} notify={notify} onRefresh={loadLeads} />
     </>;
     if (active === "upload") return <UploadCentre notify={notify} onImported={loadLeads} />;
-    if (active === "verification") return <BookingVerification leads={leadData} notify={notify} onUpdate={updateLead} />;
-    if (active === "companies" || active === "branches" || active === "users") return <CompaniesView mode={active} notify={notify} />;
+    if (active === "verification") return <BookingVerification notify={notify} onRefresh={loadLeads} />;
+    if (active === "companies" || active === "branches" || active === "users") return <CompaniesView mode={active} notify={notify} leads={leadData} />;
     if (active === "medical-aid") return <MedicalAidView notify={notify} />;
     if (active === "team") return <TeamActivity onNavigate={navigate} />;
+    if (active === "reports") return <ReportsView leads={leadData} role={role} notify={notify} />;
     if (active === "settings") return <AccountSettingsView user={user} onUserUpdate={updateCurrentUser} notify={notify} />;
     return <PlaceholderView title={activeLabel} role={role} />;
   }
@@ -242,7 +266,7 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
         </header>
         <div className="content">{renderView()}</div>
       </main>
-      {selectedLead && <LeadDrawer lead={selectedLead} employeeName={user.name} onClose={() => setSelectedLead(null)} onUpdate={updateLead} notify={notify} />}
+      {selectedLead && <LeadDrawer lead={selectedLead} employeeName={user.name} onClose={() => setSelectedLead(null)} onUpdate={updateLead} onRefresh={loadLeads} notify={notify} />}
       {toast && <div className="toast"><ShieldCheck size={17} />{toast}</div>}
     </div>
   );
