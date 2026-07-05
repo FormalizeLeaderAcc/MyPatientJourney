@@ -56,7 +56,7 @@ export function LeadsView({
             : true;
     const matchesFilter = filter === "All priorities" || lead.priority.includes(filter);
     return matchesQuery && matchesMode && matchesFilter;
-  }), [query, filter, leads, mode]);
+  }), [query, filter, leads, mode, role]);
 
   const isAllocationMode = mode === "allocation";
   const title = mode === "due" ? "Due today" : mode === "callbacks" ? "Patient callbacks" : mode === "completed" ? "Completed journeys" : isAllocationMode ? "Lead allocation" : mode === "review" ? "Manager review" : role === "employee" ? "My patient leads" : "Patient recall journeys";
