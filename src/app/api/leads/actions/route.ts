@@ -214,6 +214,18 @@ export async function POST(request: NextRequest) {
     if (payload.action === "callback_scheduled" && !payload.callback_date) {
       return jsonError("Callback date is required.");
     }
+    if (payload.action === "whatsapp_sent" && !payload.whatsapp_number?.trim()) {
+      return jsonError("WhatsApp number used is required.");
+    }
+    if (payload.action === "manager_review") {
+      if (!payload.reason?.trim()) return jsonError("Escalation reason is required.");
+      if (!payload.notes?.trim() || payload.notes.trim().length < 5) return jsonError("Escalation notes are required.");
+    }
+    if (payload.action === "final_outcome") {
+      if (!payload.final_status) return jsonError("Final outcome status is required.");
+      if (!payload.reason?.trim()) return jsonError("Final outcome reason is required.");
+      if (!payload.notes?.trim() || payload.notes.trim().length < 5) return jsonError("Final outcome notes are required.");
+    }
 
     const config = actionConfig(payload);
     const outcomeId = await ensureOutcome(admin, config.code, config.label);
