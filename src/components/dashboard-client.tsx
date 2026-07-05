@@ -49,6 +49,7 @@ const roleNav: Record<Role, { section: string; items: NavItem[] }[]> = {
       { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
       { id: "team", label: "Team Activity", icon: Users },
       { id: "leads", label: "Patient Journeys", icon: HeartHandshake },
+      { id: "allocation", label: "Lead Allocation", icon: ListChecks },
       { id: "verification", label: "Booking Verification", icon: CalendarCheck },
       { id: "review", label: "Manager Review", icon: ClipboardCheck },
       { id: "reports", label: "Reports", icon: FileBarChart },
