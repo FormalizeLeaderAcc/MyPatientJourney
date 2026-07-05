@@ -14,6 +14,7 @@ import { BookingVerification } from "./views/booking-verification";
 import { CompaniesView } from "./views/companies-view";
 import { MedicalAidView } from "./views/medical-aid-view";
 import { TeamActivity } from "./views/team-activity";
+import { RecallCampaignsView } from "./views/recall-campaigns-view";
 import { PlaceholderView } from "./views/placeholder-view";
 import { AccountSettingsView } from "./views/account-settings-view";
 import { LeadDrawer } from "./lead-drawer";
@@ -138,6 +139,12 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
       const { data: authData } = await supabase.auth.getUser();
       if (!authData.user) return;
 
+      await fetch("/api/account", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "activate_invited_user" }),
+      }).catch(() => undefined);
+
       const { data: profile } = await supabase
         .from("users")
         .select("full_name,email,company_id,branch_id,avatar_url,preferences")
@@ -194,7 +201,8 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
 
   function renderView() {
     if (active === "dashboard") return <Overview role={role} userName={user.name} leads={leadData} onLead={setSelectedLead} onNavigate={navigate} />;
-    if (["leads", "due", "callbacks", "completed", "allocation", "campaigns", "review"].includes(active)) return <>
+    if (active === "campaigns") return <RecallCampaignsView leads={leadData} onNavigate={navigate} />;
+    if (["leads", "due", "callbacks", "completed", "allocation", "review"].includes(active)) return <>
       {leadsError && <div className="callout" style={{ background: "#fbe9ea", color: "#a84850", marginBottom: 14 }}><ShieldCheck size={14} /><span>{leadsError}</span></div>}
       {leadsLoading && <div className="callout" style={{ marginBottom: 14 }}><ShieldCheck size={14} /><span>Loading live patient journeys from Supabase...</span></div>}
       <LeadsView role={role} mode={active} leads={leadData} assignableUsers={assignableUsers} onLead={setSelectedLead} notify={notify} onRefresh={loadLeads} />

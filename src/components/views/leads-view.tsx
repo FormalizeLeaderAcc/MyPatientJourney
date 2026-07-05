@@ -55,7 +55,8 @@ export function LeadsView({
     return matchesQuery && matchesMode && matchesFilter;
   }), [query, filter, leads, mode]);
 
-  const title = mode === "due" ? "Due today" : mode === "callbacks" ? "Patient callbacks" : mode === "completed" ? "Completed journeys" : mode === "allocation" ? "Lead allocation" : mode === "review" ? "Manager review" : mode === "campaigns" ? "Recall campaigns" : role === "employee" ? "My patient leads" : "Patient recall journeys";
+  const isAllocationMode = mode === "allocation";
+  const title = mode === "due" ? "Due today" : mode === "callbacks" ? "Patient callbacks" : mode === "completed" ? "Completed journeys" : isAllocationMode ? "Lead allocation" : mode === "review" ? "Manager review" : role === "employee" ? "My patient leads" : "Patient recall journeys";
   const sub = mode === "allocation" ? "Balance patient opportunities across branches and care coordinators." : mode === "review" ? "Resolve journeys that need a manager's judgement or have reached three unsuccessful days." : "Find the next patient, understand their history, and keep their follow-up moving.";
   const allocationEligible = visible.filter((lead) => lead.assignedTo === "Unallocated" && !finalStatuses.includes(lead.status));
   const selectedEmployee = assignableUsers.find((user) => user.id === selectedEmployeeId);
@@ -129,7 +130,13 @@ export function LeadsView({
 
   function openNextPatient() {
     if (role !== "employee") {
-      void allocateVisibleLeads();
+      if (isAllocationMode) {
+        void allocateVisibleLeads();
+        return;
+      }
+      const firstVisible = visible.find((lead) => !finalStatuses.includes(lead.status));
+      if (firstVisible) onLead(firstVisible);
+      else notify("No active patient journey is visible in this view.");
       return;
     }
     if (!leads.length) {
@@ -152,8 +159,8 @@ export function LeadsView({
   }
 
   return <>
-    <div className="page-head"><div><h1>{title}</h1><p>{sub}</p></div><div className="head-actions">{role !== "employee" && <button className="btn btn-secondary" onClick={exportVisibleLeads}><ArrowDownToLine size={14} /><span>Export</span></button>}<button className="btn btn-primary" disabled={role !== "employee" && allocating} onClick={openNextPatient}><UserPlus size={14} /><span>{role === "employee" ? "Open next patient" : allocating ? "Allocating..." : "Allocate leads"}</span></button></div></div>
-    {mode === "allocation" && role !== "employee" && <div className="card" style={{ marginBottom: 14 }}>
+    <div className="page-head"><div><h1>{title}</h1><p>{sub}</p></div><div className="head-actions">{role !== "employee" && <button className="btn btn-secondary" onClick={exportVisibleLeads}><ArrowDownToLine size={14} /><span>Export</span></button>}<button className="btn btn-primary" disabled={role !== "employee" && isAllocationMode && allocating} onClick={openNextPatient}><UserPlus size={14} /><span>{role === "employee" ? "Open next patient" : isAllocationMode ? allocating ? "Allocating..." : "Allocate leads" : "Open patient journey"}</span></button></div></div>
+    {isAllocationMode && role !== "employee" && <div className="card" style={{ marginBottom: 14 }}>
       <div className="card-head"><div><div className="card-title">Allocation controls</div><div className="card-sub">Assign visible unallocated patient journeys to one active employee. Company and branch safety rails are enforced by the server and database.</div></div></div>
       <div className="card-body">
         <div className="form-grid">
@@ -173,7 +180,7 @@ export function LeadsView({
       <select className="select"><option>All branches</option></select>
       <button className="icon-btn"><SlidersHorizontal size={14} /></button>
     </div>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,fontSize:9,color:"#859593"}}><span><strong style={{color:"#263f3d"}}>{visible.length}</strong> patient journeys shown</span>{mode === "allocation" && <button className="btn btn-soft" disabled={allocating || role === "employee"} onClick={allocateVisibleLeads}><Shuffle size={13} />Auto-balance allocation</button>}</div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,fontSize:9,color:"#859593"}}><span><strong style={{color:"#263f3d"}}>{visible.length}</strong> patient journeys shown</span>{isAllocationMode && <button className="btn btn-soft" disabled={allocating || role === "employee"} onClick={allocateVisibleLeads}><Shuffle size={13} />Auto-balance allocation</button>}</div>
     {visible.length ? <div className="lead-grid">{visible.map((lead) => <article className="lead-card" key={lead.id} onClick={() => onLead(lead)}>
       <div className="lead-card-top"><span className={`badge ${badgeClass(lead.priority)}`}>{lead.priority}</span><span className="badge status-badge">{lead.status}</span></div>
       <div className="patient-cell"><div className="avatar">{lead.initials}</div><div><div className="patient-name">{lead.patient}</div><div className="patient-meta">{lead.account} · {lead.phone || "Missing contact number"}</div></div></div>
