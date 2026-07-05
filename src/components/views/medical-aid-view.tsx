@@ -42,11 +42,7 @@ export function MedicalAidView({ notify }: { notify:(message:string)=>void }) {
   useEffect(() => { void loadData(); }, []);
 
   function downloadTemplate() {
-    const sampleRows = [
-      ["Discovery Health", "Classic Comprehensive", "92", "Premium", "Example premium option"],
-      ["Bonitas", "Standard", "68", "Medium", "Example medium option"],
-    ];
-    const allRows = [templateHeaders, ...sampleRows];
+    const allRows = [templateHeaders];
     const xmlRows = allRows.map((row) => `<Row>${row.map((cell) => `<Cell><Data ss:Type="String">${escapeXml(cell)}</Data></Cell>`).join("")}</Row>`).join("");
     const workbook = `<?xml version="1.0"?>
 <?mso-application progid="Excel.Sheet"?>
