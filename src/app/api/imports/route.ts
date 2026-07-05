@@ -327,13 +327,15 @@ async function importLeadRows(
     const treatmentDescription = mappedValue(row, payload.mappings, "last_treatment_description");
     const amount = parseAmount(mappedValue(row, payload.mappings, "last_visit_total_amount_charged"));
     const dueForSixMonthRecall = isSixMonthRecallDue(lastTreatmentDate);
+    const sixMonthReviewAt = sixMonthRecallDate(lastTreatmentDate);
+    const sixMonthReviewDate = sixMonthReviewAt.slice(0, 10);
     const missingContact = !mobile && !alternative;
     const priorityLabel = missingContact
       ? "Missing Data Review"
       : "Standard Six-Month Recall";
     const recallReason = dueForSixMonthRecall
-      ? `Last treatment date was ${lastTreatmentDate}; patient has passed the six-month review window.`
-      : `Last treatment date was ${lastTreatmentDate}; patient has not yet passed the six-month review window.`;
+      ? `Due for follow-up: last treatment was ${lastTreatmentDate}, and the patient reached the six-month recall review date on ${sixMonthReviewDate}.`
+      : `Future recall pipeline: last treatment was ${lastTreatmentDate}. Patient reaches the six-month recall review date on ${sixMonthReviewDate}.`;
     const patientId = await upsertPatient(admin, {
       companyId: payload.company_id,
       accountNumber,
@@ -360,6 +362,7 @@ async function importLeadRows(
       mobile_number: mobile || null,
       alternative_number: alternative || null,
       due_for_six_month_recall: dueForSixMonthRecall,
+      six_month_review_date: sixMonthReviewDate,
     };
     const leadPayload = {
       company_id: payload.company_id,
@@ -372,7 +375,7 @@ async function importLeadRows(
       last_visit_date: lastTreatmentDate,
       last_8101_date: treatmentCodesContain(treatmentCode, "8101") ? lastTreatmentDate : null,
       last_8159_date: treatmentCodesContain(treatmentCode, "8159") ? lastTreatmentDate : null,
-      next_action_at: dueForSixMonthRecall ? new Date().toISOString() : sixMonthRecallDate(lastTreatmentDate),
+      next_action_at: dueForSixMonthRecall ? new Date().toISOString() : sixMonthReviewAt,
       integration_refs: integrationRefs,
       updated_at: new Date().toISOString(),
     };
