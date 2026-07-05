@@ -16,8 +16,12 @@ export async function middleware(request: NextRequest) {
         },
       },
     });
-    const { data } = await supabase.auth.getUser();
-    authenticated = Boolean(data.user);
+    try {
+      const { data } = await supabase.auth.getUser();
+      authenticated = Boolean(data.user);
+    } catch {
+      authenticated = false;
+    }
   }
   if (request.nextUrl.pathname.startsWith("/dashboard") && !authenticated) {
     return NextResponse.redirect(new URL("/login", request.url));

@@ -15,11 +15,12 @@ import { CompaniesView } from "./views/companies-view";
 import { MedicalAidView } from "./views/medical-aid-view";
 import { TeamActivity } from "./views/team-activity";
 import { PlaceholderView } from "./views/placeholder-view";
+import { AccountSettingsView } from "./views/account-settings-view";
 import { LeadDrawer } from "./lead-drawer";
 import { createSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client";
 
 type NavItem = { id: string; label: string; icon: typeof Activity };
-type CurrentUser = { name: string; roleLabel: string; email: string; initials: string; workspace: string };
+type CurrentUser = { name: string; roleLabel: string; email: string; initials: string; workspace: string; avatarUrl?: string | null; preferences?: Record<string, unknown> };
 
 const roleNav: Record<Role, { section: string; items: NavItem[] }[]> = {
   super: [
@@ -48,6 +49,7 @@ const roleNav: Record<Role, { section: string; items: NavItem[] }[]> = {
       { id: "verification", label: "Booking Verification", icon: CalendarCheck },
       { id: "review", label: "Manager Review", icon: ClipboardCheck },
       { id: "reports", label: "Reports", icon: FileBarChart },
+      { id: "settings", label: "Settings", icon: Settings },
     ]},
   ],
   employee: [
@@ -57,6 +59,7 @@ const roleNav: Record<Role, { section: string; items: NavItem[] }[]> = {
       { id: "due", label: "Due Today", icon: CalendarClock },
       { id: "callbacks", label: "Callbacks", icon: Activity },
       { id: "completed", label: "Completed", icon: ClipboardCheck },
+      { id: "settings", label: "Settings", icon: Settings },
     ]},
   ],
 };
@@ -69,6 +72,10 @@ function roleLabel(role: Role) {
   if (role === "super") return "Super User";
   if (role === "manager") return "Manager";
   return "Patient Care Coordinator";
+}
+
+function userPatchInitials(name: string) {
+  return initialsFrom(name);
 }
 
 export default function DashboardClient({ initialRole }: { initialRole: Role }) {
@@ -95,11 +102,11 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
 
       const { data: profile } = await supabase
         .from("users")
-        .select("full_name,email,company_id,branch_id")
+        .select("full_name,email,company_id,branch_id,avatar_url,preferences")
         .eq("id", authData.user.id)
         .maybeSingle();
       const { data: roleRows } = await supabase.from("user_roles").select("role").eq("user_id", authData.user.id);
-      const nextRole: Role = roleRows?.some((row) => row.role === "super_user")
+      const nextRole: Role = roleRows?.some((row) => row.role === "super_user" || row.role === "sub_super_user")
         ? "super"
         : roleRows?.some((row) => row.role === "manager")
           ? "manager"
@@ -107,13 +114,16 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
 
       const displayName = profile?.full_name || authData.user.user_metadata?.full_name || authData.user.email || "MyPatient Journey User";
       setRole(nextRole);
-      document.cookie = `mpj_role=${nextRole}; path=/; max-age=86400; SameSite=Lax; Secure`;
+      const secureCookie = window.location.protocol === "https:" ? "; Secure" : "";
+      document.cookie = `mpj_role=${nextRole}; path=/; max-age=86400; SameSite=Lax${secureCookie}`;
       setUser({
         name: displayName,
         roleLabel: roleLabel(nextRole),
         email: profile?.email || authData.user.email || "",
         initials: initialsFrom(displayName),
         workspace: nextRole === "super" ? "All organisations" : "Assigned workspace",
+        avatarUrl: profile?.avatar_url ?? authData.user.user_metadata?.avatar_url ?? null,
+        preferences: (profile?.preferences ?? {}) as Record<string, unknown>,
       });
     }
 
@@ -129,6 +139,12 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
     setLeadData((current) => current.map((lead) => lead.id === next.id ? next : lead));
     setSelectedLead(next);
   }
+  function updateCurrentUser(next: Partial<CurrentUser>) {
+    setUser((current) => {
+      const nextName = next.name ?? current.name;
+      return { ...current, ...next, initials: next.name ? userPatchInitials(nextName) : current.initials };
+    });
+  }
   async function logout() {
     if (isSupabaseConfigured) await createSupabaseBrowserClient().auth.signOut();
     document.cookie = "mpj_role=; path=/; max-age=0";
@@ -143,6 +159,7 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
     if (active === "companies" || active === "branches" || active === "users") return <CompaniesView mode={active} notify={notify} />;
     if (active === "medical-aid") return <MedicalAidView notify={notify} />;
     if (active === "team") return <TeamActivity />;
+    if (active === "settings") return <AccountSettingsView user={user} onUserUpdate={updateCurrentUser} notify={notify} />;
     return <PlaceholderView title={activeLabel} role={role} />;
   }
 
@@ -167,7 +184,7 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
           <div className="top-actions">
             <button className="icon-btn" aria-label="Search"><Search size={16} /></button>
             <button className="icon-btn" aria-label="Notifications"><Bell size={16} /></button>
-            <div className="avatar">{user.initials}</div>
+            {user.avatarUrl ? <img alt="Profile" src={user.avatarUrl} style={{ width: 34, height: 34, borderRadius: 12, objectFit: "cover" }} /> : <div className="avatar">{user.initials}</div>}
           </div>
         </header>
         <div className="content">{renderView()}</div>

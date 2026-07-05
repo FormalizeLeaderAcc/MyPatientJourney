@@ -136,8 +136,9 @@ export default function ConfirmAccountPage() {
     if (updateError || !data.user) { setError(updateError?.message ?? "Unable to complete account setup."); setSaving(false); return; }
 
     const appRole = data.user.app_metadata?.role as string | undefined;
-    const uiRole: Role = appRole === "super_user" ? "super" : appRole === "manager" ? "manager" : "employee";
-    document.cookie = `mpj_role=${uiRole}; path=/; max-age=86400; SameSite=Lax; Secure`;
+    const uiRole: Role = appRole === "super_user" || appRole === "sub_super_user" ? "super" : appRole === "manager" ? "manager" : "employee";
+    const secureCookie = window.location.protocol === "https:" ? "; Secure" : "";
+    document.cookie = `mpj_role=${uiRole}; path=/; max-age=86400; SameSite=Lax${secureCookie}`;
     window.location.href = "/dashboard";
   }
 

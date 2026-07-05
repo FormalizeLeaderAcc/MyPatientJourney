@@ -26,11 +26,16 @@ export type Priority =
 
 export interface Lead {
   id: string;
+  companyId?: string;
+  branchId?: string | null;
+  patientId?: string;
   patient: string;
   initials: string;
   account: string;
   phone: string;
+  alternatePhone?: string | null;
   whatsapp: string | null;
+  email?: string | null;
   branch: string;
   medicalAid: string;
   option: string;
@@ -56,4 +61,3 @@ export interface Metric {
   trend?: string;
   tone?: "teal" | "blue" | "violet" | "orange" | "rose";
 }
-

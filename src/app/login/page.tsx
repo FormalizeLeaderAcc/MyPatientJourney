@@ -29,14 +29,22 @@ export default function LoginPage() {
       return;
     }
 
+    const { data: sessionData } = await supabase.auth.getSession();
+    if (!sessionData.session) {
+      setError("Sign-in was accepted, but this browser did not store the secure session. Please refresh this local page and try again.");
+      setLoading(false);
+      return;
+    }
+
     const { data: roleRows } = await supabase.from("user_roles").select("role").eq("user_id", data.user.id);
-    const uiRole = roleRows?.some((row) => row.role === "super_user")
+    const uiRole = roleRows?.some((row) => row.role === "super_user" || row.role === "sub_super_user")
       ? "super"
       : roleRows?.some((row) => row.role === "manager")
         ? "manager"
         : "employee";
 
-    document.cookie = `mpj_role=${uiRole}; path=/; max-age=86400; SameSite=Lax; Secure`;
+    const secureCookie = window.location.protocol === "https:" ? "; Secure" : "";
+    document.cookie = `mpj_role=${uiRole}; path=/; max-age=86400; SameSite=Lax${secureCookie}`;
     window.location.href = "/dashboard";
   }
 
