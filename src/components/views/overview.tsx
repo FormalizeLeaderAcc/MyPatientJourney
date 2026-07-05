@@ -79,7 +79,7 @@ export function Overview({ role, userName, leads, stats, onLead, onNavigate }: {
       <div className="dashboard-grid">
         <div className="card">
           <div className="card-head"><div><div className="card-title">Next patients to support</div><div className="card-sub">Allocated patient journeys</div></div></div>
-          <LeadRows leads={leads} onLead={onLead} />
+          <LeadRows leads={activeLeads} onLead={onLead} />
         </div>
         <EmptyCard title="No care goal yet" body="Weekly targets will be shown once your manager allocates live recall journeys." />
       </div>

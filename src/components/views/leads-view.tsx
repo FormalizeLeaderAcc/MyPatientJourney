@@ -51,6 +51,8 @@ export function LeadsView({
           ? finalStatuses.includes(lead.status)
           : mode === "review"
             ? lead.status === "Manager Review"
+            : role === "employee" && mode === "leads"
+              ? !finalStatuses.includes(lead.status)
             : true;
     const matchesFilter = filter === "All priorities" || lead.priority.includes(filter);
     return matchesQuery && matchesMode && matchesFilter;
