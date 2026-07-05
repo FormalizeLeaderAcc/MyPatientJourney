@@ -167,6 +167,7 @@ export function UploadCentre({ notify, onImported }: { notify: (message: string)
   const [branchId, setBranchId] = useState("");
   const [listToRecall, setListToRecall] = useState<UploadedList | null>(null);
   const [recallReason, setRecallReason] = useState("");
+  const [recallPassword, setRecallPassword] = useState("");
   const [recalling, setRecalling] = useState(false);
   const [error, setError] = useState("");
   const [validationDetails, setValidationDetails] = useState<string[]>([]);
@@ -357,12 +358,16 @@ export function UploadCentre({ notify, onImported }: { notify: (message: string)
       setError("Please enter a clear reason before recalling this uploaded list.");
       return;
     }
+    if (!recallPassword.trim()) {
+      setError("Enter your Super User password to confirm this protected recall.");
+      return;
+    }
     setRecalling(true);
     setError("");
     const response = await fetch("/api/admin/setup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "recall_uploaded_list", uploaded_file_id: listToRecall.id, reason: recallReason }),
+      body: JSON.stringify({ action: "recall_uploaded_list", uploaded_file_id: listToRecall.id, reason: recallReason, password: recallPassword }),
     });
     const result = await response.json();
     setRecalling(false);
@@ -373,6 +378,7 @@ export function UploadCentre({ notify, onImported }: { notify: (message: string)
     notify(result.message ?? "Uploaded list recalled");
     setListToRecall(null);
     setRecallReason("");
+    setRecallPassword("");
     await loadScopeData();
   }
 
@@ -456,7 +462,7 @@ export function UploadCentre({ notify, onImported }: { notify: (message: string)
       </div>
     </div>
 
-    {listToRecall && <div className="modal-backdrop" onClick={() => setListToRecall(null)}><div className="modal" onClick={(event) => event.stopPropagation()}><div className="modal-head"><strong>Recall uploaded list</strong><button className="icon-btn" onClick={() => setListToRecall(null)}>x</button></div><div className="modal-body"><div className="callout" style={{ background: "#fff4ed" }}><ShieldAlert size={14}/><span>This is destructive and primary-Super-User-only. It removes records created from this imported list only; audit history remains.</span></div><p style={{ fontSize: 11, color: "#657875", lineHeight: 1.6 }}><strong>{listToRecall.original_name}</strong><br/>{companyById[listToRecall.company_id]?.name ?? "Unknown company"} - {listToRecall.row_count ?? 0} rows</p><div className="form-field"><label>Reason for recall *</label><textarea className="form-control" value={recallReason} onChange={(event) => setRecallReason(event.target.value)} placeholder="Example: Wrong company list uploaded in error"/></div></div><div className="modal-actions"><button className="btn btn-secondary" onClick={() => setListToRecall(null)}>Cancel</button><button className="btn btn-danger-soft" disabled={recalling || recallReason.trim().length < 8} onClick={recallUploadedList}>{recalling ? "Recalling..." : "Confirm recall"}</button></div></div></div>}
+    {listToRecall && <div className="modal-backdrop" onClick={() => { setListToRecall(null); setRecallPassword(""); }}><div className="modal" onClick={(event) => event.stopPropagation()}><div className="modal-head"><strong>Recall uploaded list</strong><button className="icon-btn" onClick={() => { setListToRecall(null); setRecallPassword(""); }}>x</button></div><div className="modal-body"><div className="callout" style={{ background: "#fff4ed" }}><ShieldAlert size={14}/><span>This is destructive and primary-Super-User-only. It removes records created from this imported list only; audit history remains. Password confirmation is required.</span></div><p style={{ fontSize: 11, color: "#657875", lineHeight: 1.6 }}><strong>{listToRecall.original_name}</strong><br/>{companyById[listToRecall.company_id]?.name ?? "Unknown company"} - {listToRecall.row_count ?? 0} rows</p><div className="form-field"><label>Reason for recall *</label><textarea className="form-control" value={recallReason} onChange={(event) => setRecallReason(event.target.value)} placeholder="Example: Wrong company list uploaded in error"/></div><div className="form-field" style={{ marginTop: 12 }}><label>Confirm with your Super User password *</label><input className="form-control" type="password" value={recallPassword} onChange={(event) => setRecallPassword(event.target.value)} placeholder="Enter your login password" autoComplete="current-password"/></div></div><div className="modal-actions"><button className="btn btn-secondary" onClick={() => { setListToRecall(null); setRecallPassword(""); }}>Cancel</button><button className="btn btn-danger-soft" disabled={recalling || recallReason.trim().length < 8 || !recallPassword.trim()} onClick={recallUploadedList}>{recalling ? "Recalling..." : "Confirm recall"}</button></div></div></div>}
   </>;
 }
 

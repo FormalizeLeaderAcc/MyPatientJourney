@@ -11,7 +11,11 @@ type WorkHandling =
 
 type SetupPayload =
   | { action: "create_company"; name: string; registration_number?: string | null }
+  | { action: "update_company"; company_id: string; name: string; registration_number?: string | null }
+  | { action: "delete_company"; company_id: string; password: string }
   | { action: "create_branch"; company_id: string; name: string; practice_phone?: string | null }
+  | { action: "update_branch"; branch_id: string; name: string; practice_phone?: string | null }
+  | { action: "delete_branch"; branch_id: string; password: string }
   | { action: "invite_user"; full_name: string; email: string; role: AppRole; company_id?: string | null; branch_id?: string | null }
   | { action: "update_user_profile"; user_id: string; full_name: string; role: AppRole; company_id?: string | null; branch_id?: string | null }
   | { action: "set_user_status"; user_id: string; status: Exclude<AccountStatus, "invited" | "deleted">; work_handling?: WorkHandling }
@@ -19,7 +23,7 @@ type SetupPayload =
   | { action: "send_password_reset"; user_id?: string; email?: string }
   | { action: "change_user_email"; user_id: string; email: string }
   | { action: "import_medical_aids"; company_id?: string | null; original_name: string; rows: MedicalAidImportRow[] }
-  | { action: "recall_uploaded_list"; uploaded_file_id: string; reason: string };
+  | { action: "recall_uploaded_list"; uploaded_file_id: string; reason: string; password: string };
 
 type MedicalAidImportRow = {
   scheme_name: string;
@@ -56,6 +60,16 @@ function isPrivilegedRole(role?: AppRole | null) {
 function statusToActive(status: AccountStatus) {
   return status === "active" || status === "invited";
 }
+
+const finalLeadStatuses = [
+  "patient_booked_and_verified",
+  "patient_not_interested",
+  "wrong_number_confirmed",
+  "patient_moved_away",
+  "patient_deceased",
+  "duplicate",
+  "manager_closed",
+];
 
 async function safeAudit(
   admin: AdminClient,
@@ -108,6 +122,44 @@ async function ensureCanManageUser(admin: AdminClient, requesterIsPrimarySuper: 
   if (targetUserId && await targetHasPrivilegedRole(admin, targetUserId)) {
     throw new Error("Only the primary Super User can manage Super Users and Sub Super Users.");
   }
+}
+
+async function verifyPrimarySuperPassword(
+  supabaseUrl: string,
+  anonKey: string,
+  email: string | undefined | null,
+  password: string | undefined,
+) {
+  if (!email) throw new Error("Your Super User email could not be verified.");
+  if (!password?.trim()) throw new Error("Enter your Super User password to confirm this protected action.");
+  const passwordClient = createClient(supabaseUrl, anonKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const { error } = await passwordClient.auth.signInWithPassword({
+    email,
+    password,
+  });
+  if (error) throw new Error("Password confirmation failed. Please check your Super User login password.");
+}
+
+async function activeLeadCountForCompany(admin: AdminClient, companyId: string) {
+  const { count, error } = await admin
+    .from("leads")
+    .select("id", { count: "exact", head: true })
+    .eq("company_id", companyId)
+    .not("status", "in", `(${finalLeadStatuses.join(",")})`);
+  if (error) throw new Error(error.message);
+  return count ?? 0;
+}
+
+async function activeLeadCountForBranch(admin: AdminClient, branchId: string) {
+  const { count, error } = await admin
+    .from("leads")
+    .select("id", { count: "exact", head: true })
+    .eq("branch_id", branchId)
+    .not("status", "in", `(${finalLeadStatuses.join(",")})`);
+  if (error) throw new Error(error.message);
+  return count ?? 0;
 }
 
 async function getActiveAssignmentCount(admin: AdminClient, userId: string) {
@@ -344,6 +396,55 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: "Company created" });
     }
 
+    if (payload.action === "update_company") {
+      if (!payload.company_id || !payload.name?.trim()) return jsonError("Company and name are required.");
+      const { data: before, error: beforeError } = await admin
+        .from("companies")
+        .select("id,name,registration_number,is_active")
+        .eq("id", payload.company_id)
+        .maybeSingle();
+      if (beforeError) throw new Error(beforeError.message);
+      if (!before) return jsonError("Company not found.", 404);
+      const { error } = await admin
+        .from("companies")
+        .update({
+          name: payload.name.trim(),
+          registration_number: payload.registration_number || null,
+        })
+        .eq("id", payload.company_id);
+      if (error) throw new Error(error.message);
+      await safeAudit(admin, authData.user.id, "updated_company", "company", payload.company_id, payload.company_id, before, {
+        name: payload.name.trim(),
+        registration_number: payload.registration_number || null,
+      });
+      return NextResponse.json({ message: "Company updated" });
+    }
+
+    if (payload.action === "delete_company") {
+      if (!requesterIsPrimarySuper) return jsonError("Only the primary Super User can delete companies.", 403);
+      if (!payload.company_id) return jsonError("Company is required.");
+      await verifyPrimarySuperPassword(supabaseUrl, anonKey, requester.profile?.email ?? authData.user.email, payload.password);
+      const activeLeadCount = await activeLeadCountForCompany(admin, payload.company_id);
+      if (activeLeadCount > 0) {
+        return jsonError(`This company has ${activeLeadCount.toLocaleString()} active lead(s). Recall/complete those leads before deleting the company.`, 409);
+      }
+      const { data: before, error: beforeError } = await admin
+        .from("companies")
+        .select("id,name,registration_number,is_active")
+        .eq("id", payload.company_id)
+        .maybeSingle();
+      if (beforeError) throw new Error(beforeError.message);
+      if (!before) return jsonError("Company not found.", 404);
+      const { error } = await admin.from("companies").update({ is_active: false }).eq("id", payload.company_id);
+      if (error) throw new Error(error.message);
+      await safeAudit(admin, authData.user.id, "soft_deleted_company", "company", payload.company_id, payload.company_id, before, {
+        is_active: false,
+        protected_by_password_confirmation: true,
+        active_leads_at_delete: activeLeadCount,
+      });
+      return NextResponse.json({ message: "Company deleted safely. Historical records remain traceable." });
+    }
+
     if (payload.action === "create_branch") {
       if (!payload.company_id || !payload.name?.trim()) return jsonError("Company and branch name are required.");
       const { data, error } = await admin.from("branches").insert({
@@ -354,6 +455,55 @@ export async function POST(request: NextRequest) {
       if (error) throw new Error(error.message);
       await safeAudit(admin, authData.user.id, "created_branch", "branch", data.id, payload.company_id, null, { name: payload.name.trim() });
       return NextResponse.json({ message: "Branch created" });
+    }
+
+    if (payload.action === "update_branch") {
+      if (!payload.branch_id || !payload.name?.trim()) return jsonError("Branch and name are required.");
+      const { data: before, error: beforeError } = await admin
+        .from("branches")
+        .select("id,company_id,name,practice_phone,is_active")
+        .eq("id", payload.branch_id)
+        .maybeSingle();
+      if (beforeError) throw new Error(beforeError.message);
+      if (!before) return jsonError("Branch not found.", 404);
+      const { error } = await admin
+        .from("branches")
+        .update({
+          name: payload.name.trim(),
+          practice_phone: payload.practice_phone || null,
+        })
+        .eq("id", payload.branch_id);
+      if (error) throw new Error(error.message);
+      await safeAudit(admin, authData.user.id, "updated_branch", "branch", payload.branch_id, before.company_id, before, {
+        name: payload.name.trim(),
+        practice_phone: payload.practice_phone || null,
+      });
+      return NextResponse.json({ message: "Branch updated" });
+    }
+
+    if (payload.action === "delete_branch") {
+      if (!requesterIsPrimarySuper) return jsonError("Only the primary Super User can delete branches.", 403);
+      if (!payload.branch_id) return jsonError("Branch is required.");
+      await verifyPrimarySuperPassword(supabaseUrl, anonKey, requester.profile?.email ?? authData.user.email, payload.password);
+      const activeLeadCount = await activeLeadCountForBranch(admin, payload.branch_id);
+      if (activeLeadCount > 0) {
+        return jsonError(`This branch has ${activeLeadCount.toLocaleString()} active lead(s). Recall/complete those leads before deleting the branch.`, 409);
+      }
+      const { data: before, error: beforeError } = await admin
+        .from("branches")
+        .select("id,company_id,name,practice_phone,is_active")
+        .eq("id", payload.branch_id)
+        .maybeSingle();
+      if (beforeError) throw new Error(beforeError.message);
+      if (!before) return jsonError("Branch not found.", 404);
+      const { error } = await admin.from("branches").update({ is_active: false }).eq("id", payload.branch_id);
+      if (error) throw new Error(error.message);
+      await safeAudit(admin, authData.user.id, "soft_deleted_branch", "branch", payload.branch_id, before.company_id, before, {
+        is_active: false,
+        protected_by_password_confirmation: true,
+        active_leads_at_delete: activeLeadCount,
+      });
+      return NextResponse.json({ message: "Branch deleted safely. Historical records remain traceable." });
     }
 
     if (payload.action === "invite_user") {
@@ -498,6 +648,7 @@ export async function POST(request: NextRequest) {
       if (!requesterIsPrimarySuper) return jsonError("Only the primary Super User can recall or withdraw uploaded lists.", 403);
       if (!payload.uploaded_file_id) return jsonError("Uploaded list is required.");
       if (!payload.reason?.trim() || payload.reason.trim().length < 8) return jsonError("Please provide a clear recall reason.");
+      await verifyPrimarySuperPassword(supabaseUrl, anonKey, requester.profile?.email ?? authData.user.email, payload.password);
       const { data, error } = await admin.rpc("recall_uploaded_list", {
         p_uploaded_file_id: payload.uploaded_file_id,
         p_actor_id: authData.user.id,
