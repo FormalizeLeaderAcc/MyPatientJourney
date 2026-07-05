@@ -7,6 +7,7 @@ import { createSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabas
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -81,7 +82,11 @@ export default function LoginPage() {
             </div>
             <div className="field">
               <label htmlFor="password">Password</label>
-              <div className="input-wrap"><LockKeyhole size={16} /><input id="password" className="input" value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" required /><Eye size={15} style={{ left: "auto", right: 14 }} /></div>
+              <div className="input-wrap">
+                <LockKeyhole size={16} />
+                <input id="password" className="input password-input" value={password} onChange={(event) => setPassword(event.target.value)} type={showPassword ? "text" : "password"} autoComplete="current-password" required />
+                <button className="password-toggle" type="button" aria-label={showPassword ? "Hide password" : "Show password"} aria-pressed={showPassword} onClick={() => setShowPassword((current) => !current)}><Eye size={16} /></button>
+              </div>
             </div>
             {error && <div className="callout" style={{ background: "#fbe9ea", color: "#a84850" }}><ShieldCheck size={14} /><span>{error}</span></div>}
             <div className="login-row">
@@ -91,9 +96,9 @@ export default function LoginPage() {
             <button className="btn btn-primary btn-wide" type="submit" disabled={loading}>{loading ? "Opening your workspace..." : <>Sign in securely <ArrowRight size={16} /></>}</button>
           </form>
 
-          <div className="callout" style={{ marginTop: 22 }}>
+          <div className="callout login-access-note" style={{ marginTop: 22 }}>
             <ShieldCheck size={14} />
-            <span>If you do not have sign-in details, please contact Formalize Admin at <a className="text-link" href="mailto:mypatientjorney@formalize.co.za">mypatientjorney@formalize.co.za</a>. MyPatient Journey is currently available to Formalize clients only.</span>
+            <span>If you do not have sign-in details, please contact Formalize Admin at <a className="text-link" href="mailto:mypatientjourney@formalize.co.za">mypatientjourney@formalize.co.za</a>. MyPatient Journey is currently available to Formalize clients only.</span>
           </div>
           <p className="secure-note"><ShieldCheck size={12} style={{ verticalAlign: -2, marginRight: 5 }} />Protected live workspace</p>
         </div>

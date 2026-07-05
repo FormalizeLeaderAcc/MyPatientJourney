@@ -52,6 +52,10 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .input { width: 100%; height: 49px; border: 1px solid #dbe6e3; border-radius: 12px; background: white; padding: 0 14px 0 43px; outline: none; color: var(--ink); transition: .2s; }
 .input:focus { border-color: #55aaa3; box-shadow: 0 0 0 4px rgba(11,122,117,.08); }
 .input.plain { padding-left: 14px; }
+.password-input { padding-right: 48px; }
+.password-toggle { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; border: 0; border-radius: 10px; background: transparent; color: #829492; display: grid; place-items: center; cursor: pointer; transition: .18s; }
+.password-toggle:hover { background: #edf6f4; color: var(--teal); }
+.password-toggle svg { position: static; transform: none; }
 .login-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; margin: -2px 0 23px; }
 .check { display: flex; align-items: center; gap: 8px; color: var(--muted); }
 .text-link { color: var(--teal); font-weight: 700; text-decoration: none; }
@@ -63,6 +67,8 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .btn-soft { color: var(--teal-dark); background: #e7f4f1; }
 .btn-danger-soft { color: #b84f58; background: #fbe9ea; }
 .btn-wide { width: 100%; height: 50px; }
+.login-access-note { font-size: 12.5px; line-height: 1.65; align-items: flex-start; padding: 14px; }
+.login-access-note svg { flex: none; margin-top: 2px; }
 .secure-note { color: #9aa8a7; text-align: center; font-size: 11px; margin-top: 22px; }
 
 .app { min-height: 100vh; display: flex; }
