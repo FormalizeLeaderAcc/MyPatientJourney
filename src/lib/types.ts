@@ -49,6 +49,13 @@ export interface Lead {
   nextAction: string;
   latestOutcome: string;
   status: LeadStatus;
+  managerReview?: {
+    reason: string;
+    notes?: string | null;
+    recordedAt?: string | null;
+    recordedBy?: string | null;
+    source: string;
+  } | null;
   assignedTo: string;
   doctor: string;
   amount: number;

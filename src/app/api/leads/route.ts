@@ -40,6 +40,13 @@ type ContactRow = {
 type AssignmentRow = { lead_id: string; employee_id: string };
 type UserRow = { id: string; full_name: string; email: string };
 type AttemptRow = { lead_id: string; attempted_at: string };
+type AuditRow = {
+  entity_id: string;
+  actor_id: string | null;
+  action: string;
+  after_data: Record<string, unknown> | null;
+  created_at: string;
+};
 
 const dbToUiStatus: Record<string, LeadStatus> = {
   new: "New",
@@ -111,6 +118,35 @@ function contactFor(contacts: ContactRow[], type: ContactRow["contact_type"], pr
 function contactDay(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value.slice(0, 10) : date.toISOString().slice(0, 10);
+}
+
+function managerReviewContext(audits: AuditRow[], actorNameFor: (actorId: string | null) => string | null): Lead["managerReview"] {
+  const relevant = audits
+    .filter((audit) => {
+      const after = audit.after_data ?? {};
+      return audit.action === "lead_action_manager_review"
+        || after.action === "manager_review"
+        || after.status === "manager_review";
+    })
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  const latest = relevant[0];
+  if (!latest) return null;
+
+  const after = latest.after_data ?? {};
+  const directReason = typeof after.reason === "string" && after.reason.trim() ? after.reason.trim() : "";
+  const reason = directReason
+    || (after.status === "manager_review" && typeof after.outcome_code === "string" ? "Three unsuccessful contact days reached" : "")
+    || (latest.action === "verified_booking" ? "Booking verification needs follow-up" : "")
+    || "Manager review required";
+  const notes = typeof after.notes === "string" && after.notes.trim() ? after.notes.trim() : null;
+
+  return {
+    reason,
+    notes,
+    recordedAt: latest.created_at,
+    recordedBy: actorNameFor(latest.actor_id),
+    source: latest.action,
+  };
 }
 
 export async function GET(request: NextRequest) {
@@ -189,7 +225,7 @@ export async function GET(request: NextRequest) {
   const patientIds = Array.from(new Set(leadRows.map((lead) => lead.patient_id).filter(Boolean)));
   const leadIds = leadRows.map((lead) => lead.id);
 
-  const [contactResult, assignmentResult, attemptResult] = await Promise.all([
+  const [contactResult, assignmentResult, attemptResult, auditResult] = await Promise.all([
     patientIds.length
       ? admin.from("patient_contacts").select("patient_id,contact_type,value,is_primary").in("patient_id", patientIds)
       : Promise.resolve({ data: [], error: null }),
@@ -199,13 +235,19 @@ export async function GET(request: NextRequest) {
     leadIds.length
       ? admin.from("lead_attempts").select("lead_id,attempted_at").in("lead_id", leadIds)
       : Promise.resolve({ data: [], error: null }),
+    leadIds.length
+      ? admin.from("audit_logs").select("entity_id,actor_id,action,after_data,created_at").eq("entity_type", "lead").in("entity_id", leadIds).order("created_at", { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
   ]);
   if (contactResult.error) return jsonError(contactResult.error.message, 500);
   if (assignmentResult.error) return jsonError(assignmentResult.error.message, 500);
   if (attemptResult.error) return jsonError(attemptResult.error.message, 500);
+  if (auditResult.error) return jsonError(auditResult.error.message, 500);
 
   const assignments = (assignmentResult.data ?? []) as AssignmentRow[];
-  const employeeIds = Array.from(new Set(assignments.map((assignment) => assignment.employee_id)));
+  const auditRows = (auditResult.data ?? []) as AuditRow[];
+  const auditActorIds = auditRows.map((audit) => audit.actor_id).filter(Boolean) as string[];
+  const employeeIds = Array.from(new Set([...assignments.map((assignment) => assignment.employee_id), ...auditActorIds]));
   const usersById = new Map<string, UserRow>();
   if (employeeIds.length) {
     const { data: employees, error: employeeError } = await admin
@@ -225,6 +267,10 @@ export async function GET(request: NextRequest) {
   ((attemptResult.data ?? []) as AttemptRow[]).forEach((attempt) => {
     attemptsByLead.set(attempt.lead_id, [...(attemptsByLead.get(attempt.lead_id) ?? []), attempt]);
   });
+  const auditsByLead = new Map<string, AuditRow[]>();
+  auditRows.forEach((audit) => {
+    auditsByLead.set(audit.entity_id, [...(auditsByLead.get(audit.entity_id) ?? []), audit]);
+  });
 
   const leads: Lead[] = leadRows.map((lead) => {
     const patient = firstRow(lead.patients);
@@ -233,6 +279,7 @@ export async function GET(request: NextRequest) {
     const assignment = assignmentByLead.get(lead.id);
     const assignee = assignment ? usersById.get(assignment.employee_id) : null;
     const attempts = attemptsByLead.get(lead.id) ?? [];
+    const audits = auditsByLead.get(lead.id) ?? [];
     const status = dbToUiStatus[lead.status] ?? "New";
     const priority = knownPriorities.has(lead.priority_label as Priority)
       ? lead.priority_label as Priority
@@ -265,6 +312,11 @@ export async function GET(request: NextRequest) {
       nextAction: nextActionLabel(lead.next_action_at, status),
       latestOutcome: status === "New" ? "Not contacted yet" : status,
       status,
+      managerReview: status === "Manager Review" ? managerReviewContext(audits, (actorId) => {
+        if (!actorId) return null;
+        const actor = usersById.get(actorId);
+        return actor?.full_name || actor?.email || null;
+      }) : null,
       assignedTo: assignee?.full_name ?? "Unallocated",
       doctor: String(refs.practitioner ?? "Practice"),
       amount: typeof refs.last_visit_total_amount_charged === "number" ? refs.last_visit_total_amount_charged : 0,
