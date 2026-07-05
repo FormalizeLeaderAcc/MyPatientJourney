@@ -266,7 +266,7 @@ export default function DashboardClient({ initialRole }: { initialRole: Role }) 
         </header>
         <div className="content">{renderView()}</div>
       </main>
-      {selectedLead && <LeadDrawer lead={selectedLead} employeeName={user.name} onClose={() => setSelectedLead(null)} onUpdate={updateLead} onRefresh={loadLeads} notify={notify} />}
+      {selectedLead && <LeadDrawer lead={selectedLead} employeeName={user.name} role={role} onClose={() => setSelectedLead(null)} onUpdate={updateLead} onRefresh={loadLeads} notify={notify} />}
       {toast && <div className="toast"><ShieldCheck size={17} />{toast}</div>}
     </div>
   );

@@ -37,7 +37,7 @@ const statusStyles: Record<UserStatus, string> = {
   deleted: "missing",
 };
 
-const finalLeadStatuses = new Set(["Patient Booked and Verified", "Patient Not Interested", "Wrong Number Confirmed"]);
+const finalLeadStatuses = new Set(["Patient Booked and Verified", "Patient Not Interested", "Wrong Number Confirmed", "Manager Closed"]);
 
 export function CompaniesView({ mode, notify, leads = [] }: { mode:string; notify:(message:string)=>void; leads?: Lead[] }) {
   const [companies, setCompanies] = useState<Company[]>([]);

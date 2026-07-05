@@ -11,6 +11,7 @@ const finalStatuses = new Set([
   "Patient Booked and Verified",
   "Patient Not Interested",
   "Wrong Number Confirmed",
+  "Manager Closed",
 ]);
 
 function Metrics({ items }: { items: Metric[] }) {

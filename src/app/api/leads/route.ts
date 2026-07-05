@@ -62,6 +62,7 @@ const dbToUiStatus: Record<string, LeadStatus> = {
   patient_booked_and_verified: "Patient Booked and Verified",
   patient_not_interested: "Patient Not Interested",
   wrong_number_confirmed: "Wrong Number Confirmed",
+  manager_closed: "Manager Closed",
 };
 
 const knownPriorities = new Set<Priority>([
@@ -125,7 +126,9 @@ function managerReviewContext(audits: AuditRow[], actorNameFor: (actorId: string
     .filter((audit) => {
       const after = audit.after_data ?? {};
       return audit.action === "lead_action_manager_review"
+        || audit.action === "lead_action_manager_instruction"
         || after.action === "manager_review"
+        || after.action === "manager_instruction"
         || after.status === "manager_review";
     })
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
@@ -136,6 +139,7 @@ function managerReviewContext(audits: AuditRow[], actorNameFor: (actorId: string
   const directReason = typeof after.reason === "string" && after.reason.trim() ? after.reason.trim() : "";
   const reason = directReason
     || (after.status === "manager_review" && typeof after.outcome_code === "string" ? "Three unsuccessful contact days reached" : "")
+    || (after.action === "manager_instruction" ? "Manager instruction sent to employee" : "")
     || (latest.action === "verified_booking" ? "Booking verification needs follow-up" : "")
     || "Manager review required";
   const notes = typeof after.notes === "string" && after.notes.trim() ? after.notes.trim() : null;
@@ -312,11 +316,11 @@ export async function GET(request: NextRequest) {
       nextAction: nextActionLabel(lead.next_action_at, status),
       latestOutcome: status === "New" ? "Not contacted yet" : status,
       status,
-      managerReview: status === "Manager Review" ? managerReviewContext(audits, (actorId) => {
+      managerReview: managerReviewContext(audits, (actorId) => {
         if (!actorId) return null;
         const actor = usersById.get(actorId);
         return actor?.full_name || actor?.email || null;
-      }) : null,
+      }),
       assignedTo: assignee?.full_name ?? "Unallocated",
       doctor: String(refs.practitioner ?? "Practice"),
       amount: typeof refs.last_visit_total_amount_charged === "number" ? refs.last_visit_total_amount_charged : 0,

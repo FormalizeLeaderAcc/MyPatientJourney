@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { Search, Users } from "lucide-react";
 import type { AssignableUser, Lead } from "@/lib/types";
 
-const finalStatuses = new Set(["Patient Booked and Verified", "Patient Not Interested", "Wrong Number Confirmed"]);
+const finalStatuses = new Set(["Patient Booked and Verified", "Patient Not Interested", "Wrong Number Confirmed", "Manager Closed"]);
 
 export function TeamActivity({
   leads,

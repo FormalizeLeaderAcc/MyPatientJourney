@@ -4,7 +4,7 @@ import { ArrowRight, BarChart3, CalendarClock, CloudUpload, ListChecks, Sparkles
 import type { Lead } from "@/lib/types";
 
 function isActiveLead(lead: Lead) {
-  return !["Patient Booked and Verified", "Patient Not Interested", "Wrong Number Confirmed"].includes(lead.status);
+  return !["Patient Booked and Verified", "Patient Not Interested", "Wrong Number Confirmed", "Manager Closed"].includes(lead.status);
 }
 
 function MetricCard({ label, value, trend, tone }: { label: string; value: string; trend: string; tone: "teal" | "blue" | "violet" | "orange" | "rose" }) {

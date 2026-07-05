@@ -3,7 +3,7 @@
 import { ArrowDownToLine, BarChart3, FileBarChart } from "lucide-react";
 import type { Lead, Role } from "@/lib/types";
 
-const finalStatuses = new Set(["Patient Booked and Verified", "Patient Not Interested", "Wrong Number Confirmed"]);
+const finalStatuses = new Set(["Patient Booked and Verified", "Patient Not Interested", "Wrong Number Confirmed", "Manager Closed"]);
 
 function downloadCsv(fileName: string, headers: string[], rows: Array<Array<string | number>>) {
   const csv = [headers, ...rows].map((row) => row.map((cell) => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
@@ -26,6 +26,7 @@ export function ReportsView({ leads, role, notify }: { leads: Lead[]; role: Role
   const pendingVerification = leads.filter((lead) => lead.status === "Booking Recorded Pending Verification");
   const verified = leads.filter((lead) => lead.status === "Patient Booked and Verified");
   const managerReview = leads.filter((lead) => lead.status === "Manager Review");
+  const managerClosed = leads.filter((lead) => lead.status === "Manager Closed");
   const conversionRate = contacted.length ? Math.round((verified.length / contacted.length) * 100) : 0;
 
   const byBranch = Array.from(leads.reduce((map, lead) => {
@@ -56,10 +57,11 @@ export function ReportsView({ leads, role, notify }: { leads: Lead[]; role: Role
       {metric("Allocated", allocated.length, "Assigned to employees", "violet")}
       {metric("Verified bookings", verified.length, `${conversionRate}% conversion from contacted`, "orange")}
     </div>
-    <div className="metric-grid" style={{ gridTemplateColumns: "repeat(3,1fr)", marginTop: 12 }}>
+    <div className="metric-grid" style={{ gridTemplateColumns: "repeat(4,1fr)", marginTop: 12 }}>
       {metric("Contacted", contacted.length, "At least one attempt recorded", "teal")}
       {metric("Pending verification", pendingVerification.length, "Needs calendar check", "rose")}
       {metric("Manager review", managerReview.length, "Needs operational decision", "blue")}
+      {metric("Manager closed", managerClosed.length, "Closed by manager decision", "violet")}
     </div>
     <div className="card" style={{ marginTop: 18 }}>
       <div className="card-head"><div><div className="card-title">Branch performance</div><div className="card-sub">Counts are calculated from the live lead list currently visible to your role: {role === "super" ? "all organisations" : "assigned scope"}.</div></div><button className="btn btn-secondary" onClick={exportReport}><ArrowDownToLine size={13}/>CSV</button></div>

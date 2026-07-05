@@ -13,7 +13,8 @@ export type LeadStatus =
   | "Manager Review"
   | "Patient Booked and Verified"
   | "Patient Not Interested"
-  | "Wrong Number Confirmed";
+  | "Wrong Number Confirmed"
+  | "Manager Closed";
 
 export type Priority =
   | "Premium Recall Opportunity"

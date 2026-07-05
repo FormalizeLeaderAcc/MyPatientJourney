@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import { AlertTriangle, CalendarClock, Check, Clipboard, Edit3, Info, Mail, MessageCircle, Phone, PhoneCall, Send, ShieldAlert, UserRoundX, X } from "lucide-react";
-import type { Lead, LeadStatus } from "@/lib/types";
+import type { Lead, LeadStatus, Role } from "@/lib/types";
 
-type Workflow = "call" | "whatsapp" | "email" | "contacts" | "callback" | "booking" | "not-interested" | "wrong-number" | "escalate" | null;
+type Workflow = "call" | "whatsapp" | "email" | "contacts" | "callback" | "booking" | "not-interested" | "wrong-number" | "escalate" | "manager-instruction" | "manager-close" | null;
 type ResolutionWorkflow = "not-interested" | "wrong-number" | "escalate";
 
 const dbStatusToUi: Record<string, LeadStatus> = {
@@ -21,6 +21,7 @@ const dbStatusToUi: Record<string, LeadStatus> = {
   patient_booked_and_verified: "Patient Booked and Verified",
   patient_not_interested: "Patient Not Interested",
   wrong_number_confirmed: "Wrong Number Confirmed",
+  manager_closed: "Manager Closed",
 };
 
 const resolutionOptions: Record<ResolutionWorkflow, string[]> = {
@@ -60,7 +61,25 @@ function addDaysIso(days: number) {
   return date.toISOString().slice(0, 10);
 }
 
-export function LeadDrawer({ lead, employeeName, onClose, onUpdate, onRefresh, notify }: { lead:Lead; employeeName:string; onClose:()=>void; onUpdate:(lead:Lead)=>void; onRefresh?:()=>Promise<void>|void; notify:(message:string)=>void }) {
+const managerInstructionReasons = [
+  "Needs another employee follow-up",
+  "Call patient with manager guidance",
+  "Verify updated contact details first",
+  "Attempt WhatsApp follow-up",
+  "Schedule callback with specific instruction",
+  "Recheck booking or calendar concern",
+];
+
+const managerCloseReasons = [
+  "No further follow-up required",
+  "Dead-end lead after manager review",
+  "Patient concern resolved without booking",
+  "Practice decided not to continue follow-up",
+  "Duplicate or unsuitable for recall workflow",
+  "Clinical or operational reason to close",
+];
+
+export function LeadDrawer({ lead, employeeName, role, onClose, onUpdate, onRefresh, notify }: { lead:Lead; employeeName:string; role:Role; onClose:()=>void; onUpdate:(lead:Lead)=>void; onRefresh?:()=>Promise<void>|void; notify:(message:string)=>void }) {
   const [workflow, setWorkflow] = useState<Workflow>(null);
   const [outcome, setOutcome] = useState("");
   const [notes, setNotes] = useState("");
@@ -78,6 +97,8 @@ export function LeadDrawer({ lead, employeeName, onClose, onUpdate, onRefresh, n
   const [whatsappFollowUpDate, setWhatsappFollowUpDate] = useState(addDaysIso(3));
   const [whatsappNote, setWhatsappNote] = useState("");
   const [resolutionReason, setResolutionReason] = useState(defaultResolutionReason("escalate"));
+  const [managerReason, setManagerReason] = useState("Needs another employee follow-up");
+  const [managerNotes, setManagerNotes] = useState("");
   const whatsappMessage = `Good day ${lead.patient}, this is ${employeeName} from ${lead.branch}.\n\nDr ${lead.doctor} asked us to send you a courtesy reminder that you are due for your 6-month dental check-up.\n\nYour last recorded visit was on ${lead.lastVisit}. Regular check-ups help detect dental concerns early before they become painful or more serious.\n\nPlease let us know if you would like assistance with arranging your next appointment.`;
   const emailSubject = "Courtesy reminder: your dental check-up";
   const emailBody = `Good day ${lead.patient},\n\nThis is ${employeeName} from ${lead.branch}. Dr ${lead.doctor} asked us to send you a courtesy reminder that you are due for your 6-month dental check-up.\n\nYour last recorded visit was on ${lead.lastVisit}. Regular check-ups help detect dental concerns early before they become painful or more serious.\n\nPlease let us know if you would like assistance with arranging your next appointment.`;
@@ -193,6 +214,38 @@ export function LeadDrawer({ lead, employeeName, onClose, onUpdate, onRefresh, n
     );
   }
 
+  function confirmManagerResolution(action: "instruction" | "close") {
+    const reason = managerReason.trim();
+    const decisionNotes = managerNotes.trim();
+    if (!reason) {
+      notify("Choose a manager decision reason.");
+      return;
+    }
+    if (decisionNotes.length < 5) {
+      notify("Add manager notes before saving this decision.");
+      return;
+    }
+
+    if (action === "instruction") {
+      void recordLeadAction(
+        { action: "manager_instruction", reason, notes: decisionNotes },
+        "Allocated",
+        `Manager instruction: ${reason}`,
+        "Due today",
+        false,
+      );
+      return;
+    }
+
+    void recordLeadAction(
+      { action: "final_outcome", final_status: "manager_closed", reason, notes: decisionNotes },
+      "Manager Closed",
+      `Manager closed: ${reason}`,
+      "Completed",
+      false,
+    );
+  }
+
   async function recordCommunication(channel: "email" | "whatsapp_message", subject: string | null, body: string, latest: string) {
     if (lead.companyId && lead.patientId) {
       await fetch("/api/communication", {
@@ -247,6 +300,8 @@ export function LeadDrawer({ lead, employeeName, onClose, onUpdate, onRefresh, n
       {!lead.phone && <div className="callout" style={{ background: "#fff4ed", marginTop: 12 }}><ShieldAlert size={14}/><span>This patient has no valid primary contact number. Keep them active and update contact details from the practice management system before attempting contact.</span></div>}
       <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:12}}><span className={`badge ${lead.priority.includes("Premium")?"premium":lead.priority.includes("High")?"high":lead.priority.includes("Dormant")?"dormant":"standard"}`}>{lead.priority}</span><span className="badge status-badge">{lead.status}</span><span className="badge status-badge">{lead.attemptDays}/3 contact days</span></div>
       {lead.status === "Manager Review" && <div className="callout" style={{ background: "#edf6ff", marginTop: 12, alignItems: "flex-start" }}><AlertTriangle size={14}/><span><strong>Manager review context:</strong> {lead.managerReview?.reason ?? "No escalation reason was captured for this older review item."}{lead.managerReview?.notes ? <><br/><strong>Note:</strong> {lead.managerReview.notes}</> : null}{lead.managerReview?.recordedBy || lead.managerReview?.recordedAt ? <><br/><span style={{color:"#607572"}}>{lead.managerReview.recordedBy ? `Recorded by ${lead.managerReview.recordedBy}` : "Recorded"}{lead.managerReview.recordedAt ? ` on ${lead.managerReview.recordedAt.slice(0, 10)}` : ""}</span></> : null}</span></div>}
+      {lead.status === "Manager Review" && role !== "employee" && <section className="drawer-section"><div className="section-head"><strong>Manager decision</strong><span style={{fontSize:8,color:"#8a9b98"}}>Audited manager action</span></div><div className="section-body"><div className="callout" style={{background:"#f7fbfa",color:"#526b66",alignItems:"flex-start"}}><Info size={14}/><span>Use this when a manager has reviewed the escalation. You can return the patient journey to the employee with instructions, or close it as a manager decision when no further follow-up is required.</span></div><div className="action-grid" style={{gridTemplateColumns:"repeat(2,1fr)"}}><button className="action-btn" onClick={()=>{setManagerReason(managerInstructionReasons[0]);setManagerNotes("");setWorkflow("manager-instruction");}}><Send size={18}/>Send back to employee</button><button className="action-btn danger" onClick={()=>{setManagerReason(managerCloseReasons[0]);setManagerNotes("");setWorkflow("manager-close");}}><ShieldAlert size={18}/>Close as manager decision</button></div></div></section>}
+      {lead.status !== "Manager Review" && lead.managerReview && role === "employee" && <div className="callout" style={{ background: "#edf8f4", marginTop: 12, alignItems: "flex-start" }}><Info size={14}/><span><strong>Manager instruction:</strong> {lead.managerReview.reason}{lead.managerReview.notes ? <><br/><strong>Instruction note:</strong> {lead.managerReview.notes}</> : null}{lead.managerReview.recordedBy || lead.managerReview.recordedAt ? <><br/><span style={{color:"#607572"}}>{lead.managerReview.recordedBy ? `From ${lead.managerReview.recordedBy}` : "Recorded"}{lead.managerReview.recordedAt ? ` on ${lead.managerReview.recordedAt.slice(0, 10)}` : ""}</span></> : null}</span></div>}
 
       <section className="drawer-section"><div className="section-head"><strong>Patient & recall context</strong><button className="tiny-link" onClick={() => notify(`Transaction summary: last visit ${lead.lastVisit}; last 8101 ${lead.last8101}; last 8159 ${lead.last8159}; source batch ${lead.sourceBatch}.`)}>View transaction summary</button></div><div className="section-body"><div className="info-grid"><div className="info-item"><label>Medical aid</label><strong>{lead.medicalAid}</strong></div><div className="info-item"><label>Option</label><strong>{lead.option}</strong></div><div className="info-item"><label>Practitioner</label><strong>Dr {lead.doctor}</strong></div><div className="info-item"><label>Last visit</label><strong>{lead.lastVisit}</strong></div><div className="info-item"><label>Last 8101</label><strong>{lead.last8101}</strong></div><div className="info-item"><label>Last 8159</label><strong>{lead.last8159}</strong></div></div><div className="callout" style={{marginTop:14,marginBottom:0}}><Info size={14}/><span><strong>Recall reason:</strong> {lead.reason}. Imported history is read-only and traceable to {lead.sourceBatch}.</span></div></div></section>
 
@@ -273,6 +328,7 @@ export function LeadDrawer({ lead, employeeName, onClose, onUpdate, onRefresh, n
   {workflow === "contacts" && <WorkflowModal title="Update patient contact details" onClose={()=>setWorkflow(null)} action={<button className="btn btn-primary" onClick={saveContactDetails}><Check size={13}/>Save contact details</button>}><div className="callout"><Info size={14}/><span>Use contact details retrieved from the practice management system. Every saved change is sent through the audited contact update route.</span></div><div className="form-grid"><div className="form-field"><label>Primary contact number</label><input className="form-control" value={primaryPhone} onChange={(event)=>setPrimaryPhone(event.target.value)} placeholder="+27..."/></div><div className="form-field"><label>Alternative number</label><input className="form-control" value={alternatePhone} onChange={(event)=>setAlternatePhone(event.target.value)} placeholder="+27..."/></div><div className="form-field full"><label>Email address</label><input className="form-control" type="email" value={patientEmail} onChange={(event)=>setPatientEmail(event.target.value)} placeholder="patient@example.com"/></div></div></WorkflowModal>}
   {workflow === "callback" && <WorkflowModal title="Schedule patient callback" onClose={()=>setWorkflow(null)} action={<button className="btn btn-primary" onClick={()=>void recordLeadAction({ action: "callback_scheduled", callback_date: callbackDate, callback_time_range: callbackTimeRange, callback_reason: callbackReason, notes }, "Call Back Later","Callback scheduled",`${callbackDate} - ${callbackTimeRange}`)}><CalendarClock size={13}/>Schedule callback</button>}><div className="form-grid"><div className="form-field"><label>Callback date *</label><input required className="form-control" type="date" value={callbackDate} onChange={e=>setCallbackDate(e.target.value)}/></div><div className="form-field"><label>Time or time range *</label><select className="form-control" value={callbackTimeRange} onChange={(event)=>setCallbackTimeRange(event.target.value)}><option>10:00-12:00</option><option>08:00-10:00</option><option>12:00-14:00</option><option>14:00-16:00</option></select></div><div className="form-field full"><label>Reason *</label><select className="form-control" value={callbackReason} onChange={(event)=>setCallbackReason(event.target.value)}><option>Patient is currently busy</option><option>Patient requested a different day</option><option>Needs to check calendar</option><option>Discuss with family / medical aid</option></select></div><div className="form-field full"><label>Notes</label><textarea className="form-control" value={notes} onChange={(event)=>setNotes(event.target.value)} placeholder="Helpful context for the callback..."/></div></div><div className="callout" style={{marginTop:12,marginBottom:0}}><Info size={14}/><span>This lead will automatically return to the employee's due list on the callback date.</span></div></WorkflowModal>}
   {workflow === "booking" && <WorkflowModal title="Record patient booking request" onClose={()=>setWorkflow(null)} action={<button className="btn btn-primary" disabled={!bookingDate} onClick={()=>void recordLeadAction({ action: "booking_recorded", preferred_date: bookingDate, preferred_time: bookingTime, confidence: bookingConfidence, notes }, "Booking Recorded Pending Verification",`Booking recorded: ${bookingDate}`,"Awaiting manager verification", false)}><Check size={13}/>Record booking</button>}><div className="callout"><Info size={14}/><span>This records the patient's preferred appointment. A manager must find it on the official practice calendar before it becomes verified.</span></div><div className="form-grid"><div className="form-field"><label>Preferred booking date *</label><input required className="form-control" type="date" value={bookingDate} onChange={e=>setBookingDate(e.target.value)}/></div><div className="form-field"><label>Preferred time / range *</label><select className="form-control" value={bookingTime} onChange={(event)=>setBookingTime(event.target.value)}><option>10:00-12:00</option><option>Morning</option><option>Afternoon</option><option>Any available time</option></select></div><div className="form-field full"><label>Booking confidence *</label><select className="form-control" value={bookingConfidence} onChange={(event)=>setBookingConfidence(event.target.value as "confirmed_with_patient" | "requested_availability" | "tentative")}><option value="confirmed_with_patient">Confirmed with patient</option><option value="requested_availability">Patient requested availability</option><option value="tentative">Tentative</option></select></div><div className="form-field full"><label>Booking notes</label><textarea className="form-control" value={notes} onChange={(event)=>setNotes(event.target.value)} placeholder="Patient preferences, practitioner, appointment type..."/></div></div></WorkflowModal>}
+  {(workflow === "manager-instruction" || workflow === "manager-close") && <WorkflowModal title={workflow === "manager-instruction" ? "Send instruction back to employee" : "Close with manager decision"} onClose={()=>setWorkflow(null)} action={<button className={`btn ${workflow === "manager-close" ? "btn-danger-soft" : "btn-primary"}`} disabled={!managerReason.trim() || managerNotes.trim().length < 5} onClick={()=>confirmManagerResolution(workflow === "manager-instruction" ? "instruction" : "close")}><Check size={13}/>{workflow === "manager-instruction" ? "Send instruction" : "Close journey"}</button>}><div className="callout" style={{ background: workflow === "manager-close" ? "#fff4ed" : "#edf8f4", alignItems: "flex-start" }}><AlertTriangle size={14}/><span>{workflow === "manager-instruction" ? "The journey will leave Manager Review and return to the employee's active work list as due today. Your instruction will remain visible in the employee drawer." : "This is a final manager outcome. The journey will leave active follow-up and Manager Review, but remain traceable and reportable as Manager Closed."}</span></div><div className="form-field"><label>{workflow === "manager-instruction" ? "Instruction reason *" : "Closure reason *"}</label><select className="form-control" value={managerReason} onChange={(event)=>setManagerReason(event.target.value)}>{(workflow === "manager-instruction" ? managerInstructionReasons : managerCloseReasons).map((reason)=><option key={reason} value={reason}>{reason}</option>)}</select></div><div className="form-field" style={{marginTop:11}}><label>Manager notes *</label><textarea className="form-control" value={managerNotes} onChange={(event)=>setManagerNotes(event.target.value)} placeholder={workflow === "manager-instruction" ? "Tell the employee exactly what to do next..." : "Record why no further follow-up is required..."}/><div style={{fontSize:8,color:"#849593",marginTop:5}}>Minimum 5 characters. This decision is stored in the audit trail.</div></div></WorkflowModal>}
   {(workflow === "not-interested" || workflow === "wrong-number" || workflow === "escalate") && <WorkflowModal title={workflow === "not-interested"?"Confirm patient is not interested":workflow === "wrong-number"?"Confirm wrong number":"Escalate to manager"} onClose={()=>setWorkflow(null)} action={<button className={`btn ${workflow === "escalate"?"btn-primary":"btn-danger-soft"}`} disabled={!resolutionReason.trim() || notes.trim().length < 5} onClick={()=>confirmResolutionOutcome(workflow)}><Check size={13}/>Confirm outcome</button>}><div className="callout" style={{background:workflow === "escalate"?"#edf6ff":"#fff4ed"}}><AlertTriangle size={14}/><span>{workflow === "escalate"?"The lead will remain active while a manager reviews it. The reason and note will be visible in audit history and manager review context.":"This is a final outcome. Add enough detail for a manager to audit the decision."}</span></div><div className="form-field"><label>{workflow === "escalate"?"Escalation reason *":"Reason *"}</label><select className="form-control" value={resolutionReason} onChange={(event)=>setResolutionReason(event.target.value)}>{resolutionOptions[workflow].map((reason)=><option key={reason} value={reason}>{reason}</option>)}</select></div><div className="form-field" style={{marginTop:11}}><label>Required notes</label><textarea className="form-control" value={notes} onChange={e=>setNotes(e.target.value)} placeholder={workflow === "escalate" ? "Explain what the manager needs to review or decide..." : "Record what was confirmed and how..."}/><div style={{fontSize:8,color:"#849593",marginTop:5}}>Minimum 5 characters. This protects the practice from silent closures or unclear escalations.</div></div></WorkflowModal>}
   </>;
 }

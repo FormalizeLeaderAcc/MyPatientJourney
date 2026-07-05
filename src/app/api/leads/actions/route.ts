@@ -9,7 +9,7 @@ type AdminClient = ReturnType<typeof createClient<any, "public", any>>;
 
 type LeadActionPayload = {
   lead_id?: string;
-  action?: "call_outcome" | "no_answer" | "whatsapp_sent" | "email_sent" | "callback_scheduled" | "booking_recorded" | "final_outcome" | "manager_review";
+  action?: "call_outcome" | "no_answer" | "whatsapp_sent" | "email_sent" | "callback_scheduled" | "booking_recorded" | "final_outcome" | "manager_review" | "manager_instruction";
   outcome?: string;
   notes?: string;
   phone_used?: string;
@@ -95,6 +95,11 @@ function canActOnLead(lead: LeadRow, roles: RoleRow[], actorId: string, activeAs
   return Boolean(activeAssignment?.employee_id === actorId);
 }
 
+function hasManagerAuthority(roles: RoleRow[], lead: LeadRow) {
+  if (roles.some((row) => row.role === "super_user" || row.role === "sub_super_user")) return true;
+  return roles.some((row) => row.role === "manager" && row.company_id === lead.company_id && (!row.branch_id || row.branch_id === lead.branch_id));
+}
+
 async function ensureOutcome(admin: AdminClient, code: string, label: string) {
   const { data: existing, error: existingError } = await admin
     .from("lead_outcomes")
@@ -147,6 +152,7 @@ function actionConfig(payload: LeadActionPayload) {
   if (payload.action === "email_sent") return { code: "email_sent", label: "Email sent", channel: "email", status: "waiting_for_patient_response", nextActionAt: dateToIso(payload.next_follow_up_date) ?? tomorrowIso() };
   if (payload.action === "callback_scheduled") return { code: "call_back_later", label: "Call back later", channel: "phone", status: "call_back_later", nextActionAt: dateToIso(payload.callback_date) };
   if (payload.action === "manager_review") return { code: "manager_review", label: "Escalated to manager", channel: "other", status: "manager_review", nextActionAt: null };
+  if (payload.action === "manager_instruction") return { code: "manager_instruction", label: "Manager instruction to employee", channel: "other", status: "allocated", nextActionAt: new Date().toISOString() };
   if (payload.action === "final_outcome") return { code: payload.final_status ?? "manager_closed", label: (payload.reason || payload.final_status || "Final outcome").replace(/_/g, " "), channel: "other", status: payload.final_status ?? "manager_closed", nextActionAt: null };
   const normalized = String(payload.outcome || "call_attempted").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
   if (normalized === "no_answer") return { code: "no_answer", label: "No answer", channel: "phone", status: "no_answer", nextActionAt: tomorrowIso() };
@@ -221,8 +227,15 @@ export async function POST(request: NextRequest) {
       if (!payload.reason?.trim()) return jsonError("Escalation reason is required.");
       if (!payload.notes?.trim() || payload.notes.trim().length < 5) return jsonError("Escalation notes are required.");
     }
+    if (payload.action === "manager_instruction") {
+      if (!hasManagerAuthority(roles, leadRow)) return jsonError("Only a manager or super user can send manager instructions.", 403);
+      if (leadRow.status !== "manager_review") return jsonError("Only journeys in Manager Review can be returned with manager instructions.");
+      if (!payload.reason?.trim()) return jsonError("Manager instruction reason is required.");
+      if (!payload.notes?.trim() || payload.notes.trim().length < 5) return jsonError("Manager instruction notes are required.");
+    }
     if (payload.action === "final_outcome") {
       if (!payload.final_status) return jsonError("Final outcome status is required.");
+      if (payload.final_status === "manager_closed" && !hasManagerAuthority(roles, leadRow)) return jsonError("Only a manager or super user can close a journey as Manager Closed.", 403);
       if (!payload.reason?.trim()) return jsonError("Final outcome reason is required.");
       if (!payload.notes?.trim() || payload.notes.trim().length < 5) return jsonError("Final outcome notes are required.");
     }
@@ -245,7 +258,7 @@ export async function POST(request: NextRequest) {
       if (callbackError) throw new Error(callbackError.message);
     }
 
-    const shouldCreateAttempt = payload.action !== "final_outcome" && payload.action !== "manager_review";
+    const shouldCreateAttempt = payload.action !== "final_outcome" && payload.action !== "manager_review" && payload.action !== "manager_instruction";
     if (shouldCreateAttempt) {
       const { error: attemptError } = await admin.from("lead_attempts").insert({
         lead_id: leadRow.id,

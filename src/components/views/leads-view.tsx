@@ -16,6 +16,7 @@ const finalStatuses: LeadStatus[] = [
   "Patient Booked and Verified",
   "Patient Not Interested",
   "Wrong Number Confirmed",
+  "Manager Closed",
 ];
 
 export function LeadsView({
