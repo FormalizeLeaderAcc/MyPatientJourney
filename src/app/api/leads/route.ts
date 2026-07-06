@@ -337,6 +337,9 @@ export async function GET(request: NextRequest) {
       : "Standard Six-Month Recall";
     const refs = lead.integration_refs ?? {};
     const phone = contactFor(contacts, "mobile", true) || contactFor(contacts, "mobile") || String(refs.mobile_number ?? "");
+    const alternatePhone = contactFor(contacts, "alternate") || String(refs.alternative_number ?? "") || null;
+    const manualContactRequired = Boolean(refs.manual_contact_required) && !phone && !alternatePhone;
+    const contactFlag = typeof refs.contact_flag === "string" ? refs.contact_flag : manualContactRequired ? "Patient telephone must be added manually" : null;
     const nextActionAt = refs.due_for_six_month_recall === false && ["New", "Allocated"].includes(status) && attempts.length === 0
       ? sixMonthRecallDate(lead.last_visit_date) ?? lead.next_action_at
       : lead.next_action_at;
@@ -354,7 +357,9 @@ export async function GET(request: NextRequest) {
       initials: initialsFrom(patient?.full_name ?? "Unknown patient"),
       account: patient?.account_number ?? "No account",
       phone,
-      alternatePhone: contactFor(contacts, "alternate") || String(refs.alternative_number ?? "") || null,
+      alternatePhone,
+      manualContactRequired,
+      contactFlag,
       whatsapp: contactFor(contacts, "whatsapp") || phone || null,
       email: contactFor(contacts, "email") || null,
       branch: branch?.name ?? "Company-wide",

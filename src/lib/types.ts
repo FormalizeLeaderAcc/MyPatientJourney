@@ -35,6 +35,8 @@ export interface Lead {
   account: string;
   phone: string;
   alternatePhone?: string | null;
+  manualContactRequired?: boolean;
+  contactFlag?: string | null;
   whatsapp: string | null;
   email?: string | null;
   branch: string;

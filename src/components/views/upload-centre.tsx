@@ -34,7 +34,7 @@ type UploadedList = {
 };
 type ImportProgress = {
   id: string;
-  status: "importing" | "completed" | "failed" | string;
+  status: "importing" | "completed" | "failed" | "stalled" | string;
   imported_rows: number;
   rejected_rows: number;
   row_count: number;
@@ -47,6 +47,17 @@ type ImportProgress = {
   branch_id: string | null;
   original_name: string;
 };
+
+function importStatusClass(status: string) {
+  if (status === "completed") return "standard";
+  if (status === "failed" || status === "stalled") return "missing";
+  return "high";
+}
+
+function importStatusLabel(status: string) {
+  if (status === "stalled") return "stalled - needs review";
+  return status;
+}
 
 type CleanupField =
   | "patient_name"
@@ -687,15 +698,15 @@ function ImportReportsSection({
               <td><strong>{job.original_name}</strong><div style={{ fontSize: 8, color: "#82918f", marginTop: 3 }}>{job.id}</div></td>
               <td>{companyById[job.company_id]?.name ?? "Unknown"}</td>
               <td>{job.branch_id ? branchById[job.branch_id]?.name ?? "Unknown" : "Company-wide"}</td>
-              <td><span className={`badge ${job.status === "completed" ? "standard" : job.status === "failed" ? "missing" : "high"}`}>{job.status}</span></td>
+              <td><span className={`badge ${importStatusClass(job.status)}`}>{importStatusLabel(job.status)}</span></td>
               <td style={{ minWidth: 130 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 8, color: "#617471", marginBottom: 5 }}><span>{progress}%</span><span>{job.imported_rows.toLocaleString()} / {job.row_count.toLocaleString()}</span></div>
-                <div style={{ height: 7, borderRadius: 999, background: "#dcebe8", overflow: "hidden" }}><div style={{ width: `${progress}%`, height: "100%", background: job.status === "failed" ? "#c9656c" : "linear-gradient(90deg,#0b7a75,#58aaa2)" }} /></div>
+                <div style={{ height: 7, borderRadius: 999, background: "#dcebe8", overflow: "hidden" }}><div style={{ width: `${progress}%`, height: "100%", background: job.status === "failed" || job.status === "stalled" ? "#c9656c" : "linear-gradient(90deg,#0b7a75,#58aaa2)" }} /></div>
               </td>
               <td>{job.row_count.toLocaleString()}</td>
               <td>{job.imported_rows.toLocaleString()}</td>
               <td>{job.rejected_rows.toLocaleString()}</td>
-              <td>{job.completed_at ? new Date(job.completed_at).toLocaleString() : "Still running"}</td>
+              <td>{job.completed_at ? new Date(job.completed_at).toLocaleString() : job.status === "stalled" ? "Stalled - safe to review" : "Still running"}</td>
               <td><button className="btn btn-soft" onClick={(event) => { event.stopPropagation(); setSelectedJob(job); }}>View status</button></td>
             </tr>;
           })}</tbody>
@@ -719,10 +730,10 @@ function ImportReportModal({ job, company, branch, onClose }: { job: ImportProgr
         <div className="lead-card" style={{ boxShadow: "none" }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
             <div><strong style={{ fontFamily: "Manrope", fontSize: 13 }}>{job.original_name}</strong><p style={{ fontSize: 10, color: "#6d7f7c", marginTop: 4 }}>{company} - {branch}</p></div>
-            <span className={`badge ${job.status === "completed" ? "standard" : job.status === "failed" ? "missing" : "high"}`}>{job.status}</span>
+            <span className={`badge ${importStatusClass(job.status)}`}>{importStatusLabel(job.status)}</span>
           </div>
           <div style={{ height: 9, borderRadius: 999, background: "#dcebe8", overflow: "hidden", marginTop: 12 }}>
-            <div style={{ width: `${progress}%`, height: "100%", background: job.status === "failed" ? "#c9656c" : "linear-gradient(90deg,#0b7a75,#58aaa2)" }} />
+            <div style={{ width: `${progress}%`, height: "100%", background: job.status === "failed" || job.status === "stalled" ? "#c9656c" : "linear-gradient(90deg,#0b7a75,#58aaa2)" }} />
           </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginTop: 12 }}>
@@ -731,6 +742,7 @@ function ImportReportModal({ job, company, branch, onClose }: { job: ImportProgr
           <Metric label="Rejected / skipped" value={job.rejected_rows.toLocaleString()} />
           <Metric label="Progress" value={`${progress}%`} />
         </div>
+        {job.status === "stalled" && <div className="callout" style={{ background: "#fbe9ea", color: "#a84850", marginTop: 12 }}><ShieldAlert size={14}/><span>This import stopped updating and is no longer locking new imports. Recall the uploaded list if you want to remove partial records before retrying.</span></div>}
         {error && <div className="callout" style={{ background: "#fbe9ea", color: "#a84850", marginTop: 12 }}><ShieldAlert size={14}/><span>{error}</span></div>}
         <div className="table-wrap" style={{ border: "1px solid #e5ecea", borderRadius: 12, marginTop: 12 }}>
           <table className="data-table"><tbody>
@@ -1001,6 +1013,8 @@ function validateLeadImportReadiness(companyId: string, file: { name: string } |
     if (!lastDate || !parseDate(lastDate)) issues.push(`Row ${rowNumber}: Last Treatment Date is invalid or blank.`);
     const mobile = valueFor(row, mappings.mobile_number);
     if (mobile && !cleanPhone(mobile)) issues.push(`Row ${rowNumber}: Mobile Number format is invalid.`);
+    const alternative = valueFor(row, mappings.alternative_number);
+    if (alternative && !cleanPhone(alternative)) issues.push(`Row ${rowNumber}: Alternative Number format is invalid.`);
     const amount = valueFor(row, mappings.last_visit_total_amount_charged);
     if (amount && Number.isNaN(Number(amount.replace(/[^\d.-]/g, "")))) issues.push(`Row ${rowNumber}: Last Visit Total Amount Charged must be numeric.`);
   });
@@ -1014,7 +1028,10 @@ function leadImportWarnings(rows: Record<string, unknown>[], mappings: Partial<R
     if (!mappings[field.key]) warnings.push(`${field.label} is recommended but not mapped.`);
   }
   rows.slice(0, 100).forEach((row, index) => {
-    if (!valueFor(row, mappings.mobile_number)) warnings.push(`Row ${index + 2}: Mobile Number is missing. Import is allowed, but the lead should be reviewed.`);
+    const mobile = valueFor(row, mappings.mobile_number);
+    const alternative = valueFor(row, mappings.alternative_number);
+    if (!mobile && !alternative) warnings.push(`Row ${index + 2}: Patient telephone must be added manually. Import is allowed and the recall lead will stay active.`);
+    else if (!mobile) warnings.push(`Row ${index + 2}: Mobile Number is missing. Alternative Number will be used if available.`);
   });
   return Array.from(new Set(warnings));
 }
