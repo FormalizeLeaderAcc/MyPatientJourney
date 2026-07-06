@@ -23,6 +23,7 @@ type SetupPayload =
   | { action: "send_password_reset"; user_id?: string; email?: string }
   | { action: "change_user_email"; user_id: string; email: string }
   | { action: "import_medical_aids"; company_id?: string | null; original_name: string; rows: MedicalAidImportRow[] }
+  | { action: "save_medical_aid_option"; company_id?: string | null; option_id?: string | null; scheme_name: string; option_name: string; quality_score: number; category: "unknown" | "low" | "medium" | "high" | "premium"; notes?: string | null }
   | { action: "recall_uploaded_list"; uploaded_file_id: string; reason: string; password: string };
 
 type MedicalAidImportRow = {
@@ -34,6 +35,7 @@ type MedicalAidImportRow = {
 };
 
 type AdminClient = ReturnType<typeof createClient<any, "public", any>>;
+type MedicalAidSchemeRow = { id: string };
 type RoleRow = { role: AppRole; company_id: string | null; branch_id: string | null };
 type ProfileRow = {
   id: string;
@@ -122,6 +124,47 @@ async function ensureCanManageUser(admin: AdminClient, requesterIsPrimarySuper: 
   if (targetUserId && await targetHasPrivilegedRole(admin, targetUserId)) {
     throw new Error("Only the primary Super User can manage Super Users and Sub Super Users.");
   }
+}
+
+async function findOrCreateMedicalAidScheme(
+  admin: AdminClient,
+  payload: { company_id?: string | null; scheme_name: string; notes?: string | null },
+) {
+  const schemeName = payload.scheme_name.trim();
+  const normalized = schemeName.toLowerCase().replace(/\s+/g, " ").trim();
+  let query = admin
+    .from("medical_aid_schemes")
+    .select("id")
+    .eq("normalized_name", normalized)
+    .order("created_at", { ascending: true })
+    .limit(1);
+
+  query = payload.company_id ? query.eq("company_id", payload.company_id) : query.is("company_id", null);
+  const { data: existing, error: findError } = await query;
+  if (findError) throw new Error(findError.message);
+  const existingScheme = (existing as MedicalAidSchemeRow[] | null)?.[0];
+
+  if (existingScheme) {
+    const { error: updateError } = await admin
+      .from("medical_aid_schemes")
+      .update({ name: schemeName, notes: payload.notes ?? null })
+      .eq("id", existingScheme.id);
+    if (updateError) throw new Error(updateError.message);
+    return existingScheme;
+  }
+
+  const { data: created, error: createError } = await admin
+    .from("medical_aid_schemes")
+    .insert({
+      company_id: payload.company_id ?? null,
+      name: schemeName,
+      normalized_name: normalized,
+      notes: payload.notes ?? null,
+    })
+    .select("id")
+    .single();
+  if (createError) throw new Error(createError.message);
+  return created as MedicalAidSchemeRow;
 }
 
 async function verifyPrimarySuperPassword(
@@ -314,18 +357,11 @@ async function upsertMedicalAidRows(admin: AdminClient, actorId: string, payload
 
   for (const row of rows) {
     const schemeName = row.scheme_name.trim();
-    const normalized = schemeName.toLowerCase().replace(/\s+/g, " ").trim();
-    const { data: scheme, error: schemeError } = await admin
-      .from("medical_aid_schemes")
-      .upsert({
-        company_id: payload.company_id ?? null,
-        name: schemeName,
-        normalized_name: normalized,
-        notes: row.notes ?? null,
-      }, { onConflict: "company_id,normalized_name" })
-      .select("id")
-      .single();
-    if (schemeError) throw new Error(schemeError.message);
+    const scheme = await findOrCreateMedicalAidScheme(admin, {
+      company_id: payload.company_id ?? null,
+      scheme_name: schemeName,
+      notes: row.notes ?? null,
+    });
 
     const { error: optionError } = await admin.from("medical_aid_options").upsert({
       scheme_id: scheme.id,
@@ -343,6 +379,84 @@ async function upsertMedicalAidRows(admin: AdminClient, actorId: string, payload
     row_count: rows.length,
   });
   return { message: `${rows.length} medical aid scoring row(s) imported` };
+}
+
+async function saveMedicalAidOption(admin: AdminClient, actorId: string, payload: Extract<SetupPayload, { action: "save_medical_aid_option" }>) {
+  const schemeName = payload.scheme_name?.trim();
+  const optionName = payload.option_name?.trim();
+  const score = Number(payload.quality_score);
+  const category = payload.category;
+  if (!schemeName) throw new Error("Scheme name is required.");
+  if (!optionName) throw new Error("Option name is required.");
+  if (!Number.isFinite(score) || score < 0 || score > 100) throw new Error("Quality score must be between 0 and 100.");
+  if (!["unknown", "low", "medium", "high", "premium"].includes(category)) throw new Error("Category must be Unknown, Low, Medium, High or Premium.");
+
+  const scheme = await findOrCreateMedicalAidScheme(admin, {
+    company_id: payload.company_id ?? null,
+    scheme_name: schemeName,
+    notes: payload.notes ?? null,
+  });
+
+  if (payload.option_id) {
+    const { data: before, error: beforeError } = await admin
+      .from("medical_aid_options")
+      .select("id,scheme_id,option_name,quality_score,category,notes")
+      .eq("id", payload.option_id)
+      .maybeSingle();
+    if (beforeError) throw new Error(beforeError.message);
+    if (!before) throw new Error("The scoring option could not be found.");
+
+    const { data: duplicate, error: duplicateError } = await admin
+      .from("medical_aid_options")
+      .select("id")
+      .eq("scheme_id", scheme.id)
+      .eq("option_name", optionName)
+      .neq("id", payload.option_id)
+      .maybeSingle();
+    if (duplicateError) throw new Error(duplicateError.message);
+    if (duplicate) throw new Error("That scheme and option already exists. Edit the existing row instead.");
+
+    const { error } = await admin.from("medical_aid_options").update({
+      scheme_id: scheme.id,
+      option_name: optionName,
+      quality_score: score,
+      category,
+      notes: payload.notes ?? null,
+      updated_by: actorId,
+      updated_at: new Date().toISOString(),
+    }).eq("id", payload.option_id);
+    if (error) throw new Error(error.message);
+    await safeAudit(admin, actorId, "updated_medical_aid_option", "medical_aid_option", payload.option_id, payload.company_id ?? null, before, {
+      scheme_id: scheme.id,
+      scheme_name: schemeName,
+      option_name: optionName,
+      quality_score: score,
+      category,
+      notes: payload.notes ?? null,
+    });
+    return { message: "Medical aid scoring option updated" };
+  }
+
+  const { data: option, error: optionError } = await admin.from("medical_aid_options").upsert({
+    scheme_id: scheme.id,
+    option_name: optionName,
+    quality_score: score,
+    category,
+    notes: payload.notes ?? null,
+    updated_by: actorId,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "scheme_id,option_name" }).select("id").single();
+  if (optionError) throw new Error(optionError.message);
+
+  await safeAudit(admin, actorId, "saved_medical_aid_option", "medical_aid_option", option.id, payload.company_id ?? null, null, {
+    scheme_id: scheme.id,
+    scheme_name: schemeName,
+    option_name: optionName,
+    quality_score: score,
+    category,
+    notes: payload.notes ?? null,
+  });
+  return { message: "Medical aid scoring option saved" };
 }
 
 export async function POST(request: NextRequest) {
@@ -641,6 +755,11 @@ export async function POST(request: NextRequest) {
 
     if (payload.action === "import_medical_aids") {
       const result = await upsertMedicalAidRows(admin, authData.user.id, payload);
+      return NextResponse.json(result);
+    }
+
+    if (payload.action === "save_medical_aid_option") {
+      const result = await saveMedicalAidOption(admin, authData.user.id, payload);
       return NextResponse.json(result);
     }
 

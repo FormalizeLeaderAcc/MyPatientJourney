@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, CheckCircle2, FileSpreadsheet, LoaderCircle, Search, ShieldCheck, Sparkles, UploadCloud } from "lucide-react";
+import { ArrowDownToLine, CheckCircle2, FileSpreadsheet, LoaderCircle, Pencil, Search, ShieldCheck, Sparkles, UploadCloud, X } from "lucide-react";
 import { createSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client";
 
 type Company = { id: string; name: string };
 type Scheme = { id: string; company_id: string | null; name: string; notes: string | null };
 type Option = { id: string; scheme_id: string; option_name: string; quality_score: number; category: string; notes: string | null; updated_at: string };
 type ImportRow = { scheme_name: string; option_name: string; quality_score: number; category: "unknown" | "low" | "medium" | "high" | "premium"; notes?: string | null };
+type ManualOptionForm = { optionId: string; schemeName: string; optionName: string; qualityScore: string; category: ImportRow["category"]; notes: string };
 type ScoringResult = {
   mode: "preview" | "apply";
   scoring_options: number;
@@ -37,6 +38,7 @@ type ScoringResult = {
 
 const templateHeaders = ["scheme_name", "option_name", "quality_score", "category", "notes"];
 const categoryOptions = ["unknown", "low", "medium", "high", "premium"] as const;
+const emptyManualOption: ManualOptionForm = { optionId: "", schemeName: "", optionName: "", qualityScore: "50", category: "medium", notes: "" };
 
 export function MedicalAidView({ notify }: { notify:(message:string)=>void }) {
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -50,6 +52,8 @@ export function MedicalAidView({ notify }: { notify:(message:string)=>void }) {
   const [error, setError] = useState("");
   const [processing, setProcessing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [manualSaving, setManualSaving] = useState(false);
+  const [manualOption, setManualOption] = useState<ManualOptionForm>(emptyManualOption);
   const [scoring, setScoring] = useState(false);
   const [scoringResult, setScoringResult] = useState<ScoringResult | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -152,6 +156,67 @@ export function MedicalAidView({ notify }: { notify:(message:string)=>void }) {
     await loadData();
   }
 
+  function editOption(option: Option) {
+    const scheme = schemeById[option.scheme_id];
+    setManualOption({
+      optionId: option.id,
+      schemeName: scheme?.name ?? "",
+      optionName: option.option_name,
+      qualityScore: String(option.quality_score),
+      category: normalizeCategory(option.category),
+      notes: option.notes ?? "",
+    });
+    setError("");
+  }
+
+  function resetManualOption() {
+    setManualOption(emptyManualOption);
+    setError("");
+  }
+
+  async function saveManualOption() {
+    const score = Number(manualOption.qualityScore);
+    if (!manualOption.schemeName.trim()) {
+      setError("Scheme name is required.");
+      return;
+    }
+    if (!manualOption.optionName.trim()) {
+      setError("Option name is required.");
+      return;
+    }
+    if (!Number.isFinite(score) || score < 0 || score > 100) {
+      setError("Quality score must be between 0 and 100.");
+      return;
+    }
+
+    setManualSaving(true);
+    setError("");
+    const response = await fetch("/api/admin/setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "save_medical_aid_option",
+        company_id: companyId || null,
+        option_id: manualOption.optionId || null,
+        scheme_name: manualOption.schemeName,
+        option_name: manualOption.optionName,
+        quality_score: score,
+        category: manualOption.category,
+        notes: manualOption.notes || null,
+      }),
+    });
+    const result = await response.json();
+    setManualSaving(false);
+    if (!response.ok) {
+      setError(result.error ?? "Unable to save medical aid scoring option.");
+      return;
+    }
+    notify(result.message ?? "Medical aid scoring option saved");
+    setScoringResult(null);
+    resetManualOption();
+    await loadData();
+  }
+
   async function scoreLeads(action: "preview" | "apply") {
     if (action === "apply" && !scoringResult) {
       setError("Preview scoring impact before applying updates.");
@@ -202,6 +267,21 @@ export function MedicalAidView({ notify }: { notify:(message:string)=>void }) {
     </div>
 
     <div className="card" style={{ marginBottom: 18 }}>
+      <div className="card-head"><div><div className="card-title">{manualOption.optionId ? "Edit scoring option" : "Add scoring option manually"}</div><div className="card-sub">Add real-world wording from uploaded leads without replacing the existing intelligence list.</div></div></div>
+      <div className="card-body form-grid">
+        <div className="form-field"><label>Scheme name *</label><input className="form-control" value={manualOption.schemeName} onChange={(event) => setManualOption((current) => ({ ...current, schemeName: event.target.value }))} placeholder="e.g. BMW" /></div>
+        <div className="form-field"><label>Option name *</label><input className="form-control" value={manualOption.optionName} onChange={(event) => setManualOption((current) => ({ ...current, optionName: event.target.value }))} placeholder="e.g. BEMAS ACUTE" /></div>
+        <div className="form-field"><label>Quality score *</label><input className="form-control" type="number" min={0} max={100} value={manualOption.qualityScore} onChange={(event) => setManualOption((current) => ({ ...current, qualityScore: event.target.value }))} /></div>
+        <div className="form-field"><label>Category *</label><select className="form-control" value={manualOption.category} onChange={(event) => setManualOption((current) => ({ ...current, category: normalizeCategory(event.target.value) }))}>{categoryOptions.map((item) => <option key={item} value={item}>{titleCase(item)}</option>)}</select></div>
+        <div className="form-field full"><label>Notes</label><textarea className="form-control" value={manualOption.notes} onChange={(event) => setManualOption((current) => ({ ...current, notes: event.target.value }))} placeholder="Optional scoring reason, source, or internal note..." /></div>
+        <div className="form-field full" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button className="btn btn-primary" disabled={manualSaving} onClick={() => void saveManualOption()}>{manualSaving ? <LoaderCircle className="animate-spin" size={13}/> : <CheckCircle2 size={13}/>} {manualOption.optionId ? "Save changes" : "Add option"}</button>
+          {manualOption.optionId && <button className="btn btn-secondary" disabled={manualSaving} onClick={resetManualOption}><X size={13}/>Cancel edit</button>}
+        </div>
+      </div>
+    </div>
+
+    <div className="card" style={{ marginBottom: 18 }}>
       <div className="card-head"><div><div className="card-title">Re-score patient journeys</div><div className="card-sub">Apply the current scoring table to active leads. Preview first, then apply when satisfied.</div></div><Sparkles size={16} color="#c19038"/></div>
       <div className="card-body">
         <div className="callout" style={{ background: "#f7fbfa", color: "#526b66", alignItems: "flex-start" }}><ShieldCheck size={14}/><span>Scoring updates lead priority and scoring evidence only. It never closes, deletes, allocates, recalls, or edits patient contact details.</span></div>
@@ -226,7 +306,7 @@ export function MedicalAidView({ notify }: { notify:(message:string)=>void }) {
     </div>
 
     <div className="toolbar"><div className="searchbar"><Search size={14}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search scheme or option..."/></div><select className="select" value={category} onChange={(event) => setCategory(event.target.value)}><option>All categories</option><option>Premium</option><option>High</option><option>Medium</option><option>Low</option><option>Unknown</option></select></div>
-    <div className="card"><div className="card-head"><div><div className="card-title">Option scoring table</div><div className="card-sub">Scores influence prioritisation, but never close or delete a patient journey</div></div><Sparkles size={16} color="#c19038"/></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Scheme</th><th>Option</th><th>Score</th><th>Category</th><th>Notes</th><th>Updated</th></tr></thead><tbody>{visibleOptions.map((option) => <tr key={option.id}><td><strong>{schemeById[option.scheme_id]?.name ?? "Unknown scheme"}</strong></td><td>{option.option_name}</td><td>{option.quality_score}</td><td><span className="badge high">{option.category}</span></td><td>{option.notes ?? "—"}</td><td>{new Date(option.updated_at).toLocaleDateString()}</td></tr>)}</tbody></table>{!visibleOptions.length && <div className="empty-page" style={{ boxShadow: "none" }}><div className="empty-icon"><Sparkles size={25}/></div><h2>No medical aid scoring options yet</h2><p>Download the template, complete the rows, then import medical aid schemes and options before generating prioritised recall opportunities.</p></div>}</div></div>
+    <div className="card"><div className="card-head"><div><div className="card-title">Option scoring table</div><div className="card-sub">Scores influence prioritisation, but never close or delete a patient journey</div></div><Sparkles size={16} color="#c19038"/></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Scheme</th><th>Option</th><th>Score</th><th>Category</th><th>Notes</th><th>Updated</th><th>Actions</th></tr></thead><tbody>{visibleOptions.map((option) => <tr key={option.id}><td><strong>{schemeById[option.scheme_id]?.name ?? "Unknown scheme"}</strong></td><td>{option.option_name}</td><td>{option.quality_score}</td><td><span className="badge high">{option.category}</span></td><td>{option.notes ?? "—"}</td><td>{new Date(option.updated_at).toLocaleDateString()}</td><td><button className="btn btn-secondary" style={{ padding: "7px 10px" }} onClick={() => editOption(option)}><Pencil size={12}/>Edit</button></td></tr>)}</tbody></table>{!visibleOptions.length && <div className="empty-page" style={{ boxShadow: "none" }}><div className="empty-icon"><Sparkles size={25}/></div><h2>No medical aid scoring options yet</h2><p>Download the template, complete the rows, then import medical aid schemes and options before generating prioritised recall opportunities.</p></div>}</div></div>
   </>;
 }
 
@@ -266,4 +346,8 @@ function parseCsvRow(line: string): string[] {
 
 function escapeXml(value: string) {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function titleCase(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
