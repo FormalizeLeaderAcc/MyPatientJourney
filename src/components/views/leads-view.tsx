@@ -170,22 +170,39 @@ function MultiCheckFilter({
   selected: string[];
   onChange: (values: string[]) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const filteredOptions = options.filter((option) => option.label.toLowerCase().includes(search.toLowerCase()));
+
   function toggle(value: string) {
     onChange(selected.includes(value) ? selected.filter((item) => item !== value) : [...selected, value]);
   }
 
-  return <div className="form-field">
+  const summary = selected.length === 0 ? "All" : `${selected.length} selected`;
+
+  return <div className="form-field" style={{ position: "relative" }}>
     <label>{title}</label>
-    <div style={{ border: "1px solid #dfe9e6", borderRadius: 14, padding: 10, maxHeight: 158, overflow: "auto", background: "#fff" }}>
-      <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 10, fontWeight: 800, color: "#294541", marginBottom: 7 }}>
+    <button type="button" className="form-control" onClick={() => setOpen((value) => !value)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", textAlign: "left", cursor: "pointer" }}>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{summary}</span>
+      <span style={{ color: "#7d918e", fontSize: 10 }}>{open ? "▲" : "▼"}</span>
+    </button>
+    {open && <div style={{ position: "absolute", zIndex: 30, top: "100%", left: 0, right: 0, marginTop: 6, background: "#fff", border: "1px solid #dfe9e6", borderRadius: 16, boxShadow: "0 18px 45px rgba(32, 64, 59, .15)", padding: 10 }}>
+      <input className="form-control" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`Search ${title.toLowerCase()}...`} style={{ minHeight: 34, marginBottom: 8 }} />
+      <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 10, fontWeight: 800, color: "#294541", padding: "7px 4px", borderBottom: "1px solid #edf3f1", marginBottom: 5 }}>
         <input type="checkbox" checked={selected.length === 0} onChange={() => onChange([])} />
         Select all
       </label>
-      {options.length ? options.map((option) => <label key={option.value} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 10, color: "#566b67", marginTop: 7 }}>
-        <input type="checkbox" checked={selected.includes(option.value)} onChange={() => toggle(option.value)} />
-        <span>{option.label}{typeof option.count === "number" ? ` (${option.count})` : ""}</span>
-      </label>) : <div style={{ fontSize: 10, color: "#8c9a98" }}>No values available</div>}
-    </div>
+      <div style={{ maxHeight: 190, overflow: "auto" }}>
+        {filteredOptions.length ? filteredOptions.map((option) => <label key={option.value} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 10, color: "#566b67", padding: "7px 4px", borderRadius: 8 }}>
+          <input type="checkbox" checked={selected.includes(option.value)} onChange={() => toggle(option.value)} />
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{option.label}{typeof option.count === "number" ? ` (${option.count})` : ""}</span>
+        </label>) : <div style={{ fontSize: 10, color: "#8c9a98", padding: "10px 4px" }}>No matching values</div>}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, borderTop: "1px solid #edf3f1", paddingTop: 8, marginTop: 8 }}>
+        <button type="button" className="btn btn-soft" onClick={() => { onChange([]); setSearch(""); }}>Clear</button>
+        <button type="button" className="btn btn-secondary" onClick={() => setOpen(false)}>Done</button>
+      </div>
+    </div>}
   </div>;
 }
 
