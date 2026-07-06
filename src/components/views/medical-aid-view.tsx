@@ -8,6 +8,29 @@ type Company = { id: string; name: string };
 type Scheme = { id: string; company_id: string | null; name: string; notes: string | null };
 type Option = { id: string; scheme_id: string; option_name: string; quality_score: number; category: string; notes: string | null; updated_at: string };
 type ImportRow = { scheme_name: string; option_name: string; quality_score: number; category: "unknown" | "low" | "medium" | "high" | "premium"; notes?: string | null };
+type ScoringResult = {
+  mode: "preview" | "apply";
+  scoring_options: number;
+  active_leads_reviewed: number;
+  matched_leads: number;
+  unmatched_leads: number;
+  premium_leads: number;
+  high_leads: number;
+  medium_low_unknown_leads: number;
+  updated_leads: number;
+  samples: Array<{
+    lead_id: string;
+    patient: string;
+    account_number: string;
+    patient_scheme: string;
+    patient_option: string;
+    matched_scheme: string;
+    matched_option: string;
+    quality_score: number;
+    category: string;
+    priority_label: string;
+  }>;
+};
 
 const templateHeaders = ["scheme_name", "option_name", "quality_score", "category", "notes"];
 const categoryOptions = ["unknown", "low", "medium", "high", "premium"] as const;
@@ -24,6 +47,8 @@ export function MedicalAidView({ notify }: { notify:(message:string)=>void }) {
   const [error, setError] = useState("");
   const [processing, setProcessing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [scoring, setScoring] = useState(false);
+  const [scoringResult, setScoringResult] = useState<ScoringResult | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   async function loadData() {
@@ -120,7 +145,30 @@ export function MedicalAidView({ notify }: { notify:(message:string)=>void }) {
     notify(result.message ?? "Medical aid scoring imported");
     setRows([]);
     setFileName("");
+    setScoringResult(null);
     await loadData();
+  }
+
+  async function scoreLeads(action: "preview" | "apply") {
+    if (action === "apply" && !scoringResult) {
+      setError("Preview scoring impact before applying updates.");
+      return;
+    }
+    setScoring(true);
+    setError("");
+    const response = await fetch("/api/medical-aid/scoring", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, company_id: companyId || null }),
+    });
+    const result = await response.json();
+    setScoring(false);
+    if (!response.ok) {
+      setError(result.error ?? "Unable to score patient journeys.");
+      return;
+    }
+    setScoringResult(result as ScoringResult);
+    notify(action === "apply" ? `${result.updated_leads ?? 0} patient journey(s) re-scored` : `${result.matched_leads ?? 0} patient journey(s) matched for scoring`);
   }
 
   const schemeById = useMemo(() => Object.fromEntries(schemes.map((scheme) => [scheme.id, scheme])), [schemes]);
@@ -144,9 +192,33 @@ export function MedicalAidView({ notify }: { notify:(message:string)=>void }) {
     <div className="card" style={{ marginBottom: 18 }}>
       <div className="card-head"><div><div className="card-title">Import medical aid scoring</div><div className="card-sub">Required fields: scheme_name, option_name, quality_score, category, notes.</div></div></div>
       <div className="card-body form-grid">
-        <div className="form-field"><label>Company scope</label><select className="form-control" value={companyId} onChange={(event) => setCompanyId(event.target.value)}><option value="">Global scoring list</option>{companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></div>
+        <div className="form-field"><label>Company scope</label><select className="form-control" value={companyId} onChange={(event) => { setCompanyId(event.target.value); setScoringResult(null); }}><option value="">Global scoring list</option>{companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></div>
         <div className="form-field"><label>Selected file</label><div className="file-row" style={{ margin: 0 }}><div className="file-icon">{processing ? <LoaderCircle className="animate-spin" size={18}/> : <FileSpreadsheet size={18}/>}</div><div><strong>{fileName || "No file selected"}</strong><span>{rows.length ? `${rows.length} rows ready for validation` : "Download the template first for best results"}</span></div></div></div>
         <div className="form-field full"><button className="btn btn-primary" disabled={saving || processing || !rows.length} onClick={importRows}>{saving ? "Importing..." : <><CheckCircle2 size={13}/>Import scoring rows</>}</button></div>
+      </div>
+    </div>
+
+    <div className="card" style={{ marginBottom: 18 }}>
+      <div className="card-head"><div><div className="card-title">Re-score patient journeys</div><div className="card-sub">Apply the current scoring table to active leads. Preview first, then apply when satisfied.</div></div><Sparkles size={16} color="#c19038"/></div>
+      <div className="card-body">
+        <div className="callout" style={{ background: "#f7fbfa", color: "#526b66", alignItems: "flex-start" }}><ShieldCheck size={14}/><span>Scoring updates lead priority and scoring evidence only. It never closes, deletes, allocates, recalls, or edits patient contact details.</span></div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+          <button className="btn btn-secondary" disabled={scoring || !options.length} onClick={() => void scoreLeads("preview")}>{scoring ? <LoaderCircle className="animate-spin" size={13}/> : <Sparkles size={13}/>}Preview scoring impact</button>
+          <button className="btn btn-primary" disabled={scoring || !scoringResult || !scoringResult.matched_leads} onClick={() => void scoreLeads("apply")}><CheckCircle2 size={13}/>Apply scoring to matched leads</button>
+        </div>
+        {scoringResult && <div style={{ marginTop: 14 }}>
+          <div className="metric-grid" style={{ gridTemplateColumns: "repeat(4,1fr)", marginBottom: 12 }}>
+            {[
+              ["Reviewed", scoringResult.active_leads_reviewed.toLocaleString(), "Active journeys checked"],
+              ["Matched", scoringResult.matched_leads.toLocaleString(), "Scheme and option matched"],
+              ["Premium / high", (scoringResult.premium_leads + scoringResult.high_leads).toLocaleString(), "Priority opportunities"],
+              [scoringResult.mode === "apply" ? "Updated" : "Unmatched", (scoringResult.mode === "apply" ? scoringResult.updated_leads : scoringResult.unmatched_leads).toLocaleString(), scoringResult.mode === "apply" ? "Journeys re-scored" : "Need scoring rows"],
+            ].map((row, index)=><div className={`metric-card ${["teal","orange","rose","violet"][index]}`} key={row[0]}><div className="metric-label">{row[0]}</div><div className="metric-value">{row[1]}</div><div className="metric-trend">{row[2]}</div></div>)}
+          </div>
+          {scoringResult.samples.length > 0 && <div className="table-wrap" style={{ border: "1px solid #e5ecea", borderRadius: 12 }}>
+            <table className="data-table"><thead><tr><th>Patient</th><th>Uploaded medical aid</th><th>Matched option</th><th>Score</th><th>New priority</th></tr></thead><tbody>{scoringResult.samples.map((sample)=><tr key={sample.lead_id}><td><strong>{sample.patient}</strong><div style={{ fontSize: 8, color: "#82918f", marginTop: 3 }}>{sample.account_number}</div></td><td>{sample.patient_scheme} · {sample.patient_option}</td><td>{sample.matched_scheme} · {sample.matched_option}</td><td>{sample.quality_score} · {sample.category}</td><td><span className="badge high">{sample.priority_label}</span></td></tr>)}</tbody></table>
+          </div>}
+        </div>}
       </div>
     </div>
 

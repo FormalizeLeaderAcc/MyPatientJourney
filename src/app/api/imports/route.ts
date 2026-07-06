@@ -57,6 +57,8 @@ type AdminClient = ReturnType<typeof createClient<any, "public", any>>;
 type BranchRow = { id: string; name: string; company_id: string };
 type ExistingContactRow = { id: string; patient_id: string; contact_type: "mobile" | "alternate"; value: string; manual_override: boolean | null };
 type ExistingLeadRow = { id: string; patient_id: string; integration_refs: Record<string, unknown> | null; created_at?: string | null };
+type AidScheme = { id: string; company_id: string | null; name: string; normalized_name: string };
+type AidOption = { id: string; scheme_id: string; option_name: string; quality_score: number; category: string; medical_aid_schemes: AidScheme | AidScheme[] | null };
 type PreparedLeadRow = {
   sourceRowNumber: number;
   patientName: string;
@@ -160,6 +162,28 @@ function sixMonthRecallDate(lastTreatmentDate: string) {
 
 function treatmentCodesContain(codes: string, code: "8101" | "8159") {
   return codes.split(/[,;/\s]+/).map((item) => item.trim()).includes(code);
+}
+
+function firstRow<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value ?? null;
+}
+
+function normalizeMatch(value: unknown) {
+  return String(value ?? "").toLowerCase().trim().replace(/\s+/g, " ");
+}
+
+function medicalAidPriority(category: string, score: number) {
+  if (category === "premium" || score >= 85) return "Premium Recall Opportunity";
+  if (category === "high" || score >= 70) return "High Medical Aid Opportunity";
+  return "Standard Six-Month Recall";
+}
+
+function medicalAidPriorityScore(existingScore: number, category: string, score: number) {
+  if (category === "premium" || score >= 85) return Math.max(existingScore, 95);
+  if (category === "high" || score >= 70) return Math.max(existingScore, 80);
+  if (category === "medium" || score >= 45) return Math.max(existingScore, 60);
+  return Math.max(existingScore, 45);
 }
 
 function validateMappings(mappings: Partial<Record<SystemField, string>>, headers: string[]) {
@@ -336,6 +360,7 @@ async function importLeadRows(
   let importedRows = 0;
   let createdLeads = 0;
   let updatedLeads = 0;
+  const scoringIndex = await loadMedicalAidScoring(admin, payload.company_id);
 
   for (const chunk of chunkArray(preparedRows, importChunkSize)) {
     const patientUpserts = Array.from(new Map(chunk.map((row) => [row.accountNumber, {
@@ -427,7 +452,7 @@ async function importLeadRows(
       if (!patientId || seenLeadPatients.has(patientId)) continue;
       seenLeadPatients.add(patientId);
       const existingLead = existingLeadByPatient.get(patientId);
-      const leadPayload = leadDataForRow(row, patientId, payload, uploadedFileId, importBatchId, existingLead?.integration_refs);
+      const leadPayload = leadDataForRow(row, patientId, payload, uploadedFileId, importBatchId, scoringIndex, existingLead?.integration_refs);
       if (existingLead) leadUpdates.push({ id: existingLead.id, payload: leadPayload });
       else leadInserts.push({ ...leadPayload, status: "new" });
     }
@@ -479,11 +504,46 @@ function prepareLeadRows(payload: ImportPayload): PreparedLeadRow[] {
   });
 }
 
-function leadDataForRow(row: PreparedLeadRow, patientId: string, payload: ImportPayload, uploadedFileId: string, importBatchId: string, existingRefs?: Record<string, unknown> | null) {
+async function loadMedicalAidScoring(admin: AdminClient, companyId: string) {
+  const { data, error } = await admin
+    .from("medical_aid_options")
+    .select("id,scheme_id,option_name,quality_score,category,medical_aid_schemes(id,company_id,name,normalized_name)")
+    .order("quality_score", { ascending: false });
+  if (error) throw new Error(error.message);
+  const options = ((data ?? []) as AidOption[]).filter((option) => {
+    const scheme = firstRow(option.medical_aid_schemes);
+    return !scheme?.company_id || scheme.company_id === companyId;
+  });
+  const scoringIndex = new Map<string, AidOption>();
+  for (const option of options) {
+    const scheme = firstRow(option.medical_aid_schemes);
+    if (!scheme) continue;
+    const key = `${scheme.company_id ?? "global"}::${normalizeMatch(scheme.name)}::${normalizeMatch(option.option_name)}`;
+    if (!scoringIndex.has(key)) scoringIndex.set(key, option);
+  }
+  return scoringIndex;
+}
+
+function matchMedicalAidScore(scoringIndex: Map<string, AidOption>, row: PreparedLeadRow, companyId: string) {
+  const schemeName = normalizeMatch(row.medicalAidScheme);
+  const optionName = normalizeMatch(row.medicalAidOption);
+  if (!schemeName || !optionName) return null;
+  const option = scoringIndex.get(`${companyId}::${schemeName}::${optionName}`)
+    ?? scoringIndex.get(`global::${schemeName}::${optionName}`)
+    ?? null;
+  const scheme = firstRow(option?.medical_aid_schemes);
+  return option && scheme ? { option, scheme } : null;
+}
+
+function leadDataForRow(row: PreparedLeadRow, patientId: string, payload: ImportPayload, uploadedFileId: string, importBatchId: string, scoringIndex: Map<string, AidOption>, existingRefs?: Record<string, unknown> | null) {
   const dueForSixMonthRecall = isSixMonthRecallDue(row.lastTreatmentDate);
   const sixMonthReviewAt = sixMonthRecallDate(row.lastTreatmentDate);
   const sixMonthReviewDate = sixMonthReviewAt.slice(0, 10);
   const missingContact = !row.mobile && !row.alternative;
+  const scoringMatch = matchMedicalAidScore(scoringIndex, row, payload.company_id);
+  const scoringCategory = scoringMatch ? String(scoringMatch.option.category ?? "unknown").toLowerCase() : null;
+  const scoringScore = scoringMatch ? Number(scoringMatch.option.quality_score ?? 0) : null;
+  const basePriorityScore = dueForSixMonthRecall ? 65 : 45;
   const contactFlag = missingContact ? "Patient telephone must be added manually" : null;
   const recallReason = dueForSixMonthRecall
     ? `Due for follow-up: last treatment was ${row.lastTreatmentDate}, and the patient reached the six-month recall review date on ${sixMonthReviewDate}.`
@@ -504,6 +564,21 @@ function leadDataForRow(row: PreparedLeadRow, patientId: string, payload: Import
     six_month_review_date: sixMonthReviewDate,
     manual_contact_required: missingContact,
     contact_flag: contactFlag,
+    ...(scoringMatch && scoringCategory && scoringScore !== null ? {
+      medical_aid_scoring: {
+        matched_at: new Date().toISOString(),
+        match_confidence: "exact",
+        scheme_id: scoringMatch.scheme.id,
+        scheme_name: scoringMatch.scheme.name,
+        option_id: scoringMatch.option.id,
+        option_name: scoringMatch.option.option_name,
+        quality_score: scoringScore,
+        category: scoringCategory,
+        scope: scoringMatch.scheme.company_id ? "company" : "global",
+      },
+      medical_aid_score: scoringScore,
+      medical_aid_quality_category: scoringCategory,
+    } : {}),
   };
 
   return {
@@ -511,8 +586,8 @@ function leadDataForRow(row: PreparedLeadRow, patientId: string, payload: Import
     branch_id: payload.branch_id || null,
     patient_id: patientId,
     source_import_batch_id: importBatchId,
-    priority_label: "Standard Six-Month Recall",
-    priority_score: dueForSixMonthRecall ? 65 : 45,
+    priority_label: scoringMatch && scoringCategory && scoringScore !== null ? medicalAidPriority(scoringCategory, scoringScore) : "Standard Six-Month Recall",
+    priority_score: scoringMatch && scoringCategory && scoringScore !== null ? medicalAidPriorityScore(basePriorityScore, scoringCategory, scoringScore) : basePriorityScore,
     recall_reason: missingContact ? `${recallReason} ${contactFlag}.` : recallReason,
     last_visit_date: row.lastTreatmentDate,
     last_8101_date: treatmentCodesContain(row.treatmentCode, "8101") ? row.lastTreatmentDate : null,
