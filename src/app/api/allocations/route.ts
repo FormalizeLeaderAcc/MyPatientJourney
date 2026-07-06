@@ -18,10 +18,35 @@ type LeadRow = {
   id: string;
   company_id: string;
   branch_id: string | null;
+  patient_id?: string | null;
   status: string;
   next_action_at?: string | null;
   last_visit_date?: string | null;
+  priority_label?: string | null;
   integration_refs?: Record<string, unknown> | null;
+  patients?: PatientRow | PatientRow[] | null;
+};
+type PatientRow = {
+  full_name?: string | null;
+  account_number?: string | null;
+  medical_aid_scheme?: string | null;
+  medical_aid_option?: string | null;
+};
+type ContactRow = {
+  patient_id: string;
+  contact_type: "mobile" | "alternate" | "whatsapp" | "email";
+  value: string;
+  is_primary: boolean;
+};
+type AllocationFilters = {
+  medical_aids?: string[];
+  options?: string[];
+  last_visit_years?: string[];
+  last_visit_months?: string[];
+  attempt_bands?: string[];
+  statuses?: string[];
+  priorities?: string[];
+  red_flags?: string[];
 };
 type AdminClient = ReturnType<typeof createClient<any, "public", any>>;
 
@@ -130,6 +155,75 @@ function addMonths(date: Date, months: number) {
   return next;
 }
 
+function firstRow<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value ?? null;
+}
+
+function normalizeStatus(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+}
+
+function selected(values: string[] | undefined, value: string) {
+  return !values?.length || values.includes(value);
+}
+
+function lastVisitParts(value: string | null | undefined) {
+  if (!value) return { year: "", month: "" };
+  const parsed = new Date(`${value.slice(0, 10)}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) return { year: "", month: "" };
+  return { year: parsed.getUTCFullYear().toString(), month: String(parsed.getUTCMonth() + 1).padStart(2, "0") };
+}
+
+function attemptBand(count: number) {
+  if (count >= 3) return "3_plus";
+  return String(Math.max(0, count));
+}
+
+function hasContact(contacts: ContactRow[], type: ContactRow["contact_type"], fallback: unknown) {
+  return contacts.some((contact) => contact.contact_type === type && contact.value) || (typeof fallback === "string" && fallback.trim().length > 0);
+}
+
+function redFlagsForLead(lead: LeadRow, contacts: ContactRow[]) {
+  const patient = firstRow(lead.patients);
+  const refs = lead.integration_refs ?? {};
+  const flags: string[] = [];
+  const hasMobile = hasContact(contacts, "mobile", refs.mobile_number);
+  const hasAlternative = hasContact(contacts, "alternate", refs.alternative_number);
+  if (Boolean(refs.manual_contact_required) && !hasMobile && !hasAlternative) flags.push("manual_contact");
+  if (!hasMobile) flags.push("missing_mobile");
+  if (!hasAlternative) flags.push("missing_alternative");
+  if (!patient?.medical_aid_scheme?.trim()) flags.push("missing_medical_aid");
+  if (!patient?.medical_aid_option?.trim()) flags.push("missing_option");
+  return flags;
+}
+
+function matchesFilters(lead: LeadRow, filters: AllocationFilters | undefined, attempts: number, contacts: ContactRow[]) {
+  if (!filters) return true;
+  const patient = firstRow(lead.patients);
+  const visit = lastVisitParts(lead.last_visit_date);
+  const flags = redFlagsForLead(lead, contacts);
+  const medicalAid = patient?.medical_aid_scheme?.trim() || "Not supplied";
+  const option = patient?.medical_aid_option?.trim() || "Not supplied";
+  return selected(filters.medical_aids, medicalAid)
+    && selected(filters.options, option)
+    && selected(filters.last_visit_years, visit.year)
+    && selected(filters.last_visit_months, visit.month)
+    && selected(filters.attempt_bands, attemptBand(attempts))
+    && (!filters.statuses?.length || filters.statuses.map(normalizeStatus).includes(normalizeStatus(lead.status)))
+    && selected(filters.priorities, lead.priority_label?.trim() || "Standard Six-Month Recall")
+    && (!filters.red_flags?.length || filters.red_flags.some((flag) => flags.includes(flag)));
+}
+
+function shuffle<T>(items: T[]) {
+  const copy = [...items];
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [copy[index], copy[swapIndex]] = [copy[swapIndex], copy[index]];
+  }
+  return copy;
+}
+
 function recallDueDate(value: string | null | undefined) {
   if (!value) return null;
   const parsed = new Date(`${value.slice(0, 10)}T00:00:00.000Z`);
@@ -210,7 +304,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const payload = await request.json() as { employee_id?: string; lead_ids?: string[]; limit?: number; company_id?: string | null; branch_id?: string | null };
+    const payload = await request.json() as { employee_id?: string; lead_ids?: string[]; limit?: number; company_id?: string | null; branch_id?: string | null; allocation_mode?: "random"; filters?: AllocationFilters };
     if (!payload.employee_id) return jsonError("Choose an active employee before allocating leads.");
 
     const { admin, actorId, roles, isSuper } = await getContext(request);
@@ -248,7 +342,7 @@ export async function POST(request: NextRequest) {
     const requestedLimit = Math.max(1, Math.min(Number(payload.limit ?? 25), 250));
     let leadQuery = admin
       .from("leads")
-      .select("id,company_id,branch_id,status,next_action_at,last_visit_date,integration_refs,priority_score,created_at")
+      .select("id,company_id,branch_id,patient_id,status,next_action_at,last_visit_date,priority_label,integration_refs,priority_score,created_at,patients(full_name,account_number,medical_aid_scheme,medical_aid_option)")
       .order("priority_score", { ascending: false })
       .order("created_at", { ascending: true })
       .limit(payload.lead_ids?.length ? payload.lead_ids.length : requestedLimit * 3);
@@ -264,10 +358,35 @@ export async function POST(request: NextRequest) {
 
     const { data: leads, error: leadError } = await leadQuery;
     if (leadError) throw new Error(leadError.message);
-    const candidateLeads = ((leads ?? []) as LeadRow[])
+
+    const rawLeads = ((leads ?? []) as LeadRow[]);
+    const candidateLeadIds = rawLeads.map((lead) => lead.id);
+    const patientIds = Array.from(new Set(rawLeads.map((lead) => lead.patient_id).filter(Boolean))) as string[];
+    const [attemptResult, contactResult] = await Promise.all([
+      candidateLeadIds.length
+        ? admin.from("lead_attempts").select("lead_id").in("lead_id", candidateLeadIds)
+        : Promise.resolve({ data: [], error: null }),
+      patientIds.length
+        ? admin.from("patient_contacts").select("patient_id,contact_type,value,is_primary").in("patient_id", patientIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (attemptResult.error) throw new Error(attemptResult.error.message);
+    if (contactResult.error) throw new Error(contactResult.error.message);
+
+    const attemptsByLead = new Map<string, number>();
+    ((attemptResult.data ?? []) as { lead_id: string }[]).forEach((attempt) => {
+      attemptsByLead.set(attempt.lead_id, (attemptsByLead.get(attempt.lead_id) ?? 0) + 1);
+    });
+    const contactsByPatient = new Map<string, ContactRow[]>();
+    ((contactResult.data ?? []) as ContactRow[]).forEach((contact) => {
+      contactsByPatient.set(contact.patient_id, [...(contactsByPatient.get(contact.patient_id) ?? []), contact]);
+    });
+
+    const candidateLeads = rawLeads
       .filter((lead) => leadAllowedByRequester(lead, roles, isSuper))
       .filter((lead) => leadAssignableToUser(lead, targetUser as UserRow, targetRoleRows))
-      .filter(isDueForAllocation);
+      .filter(isDueForAllocation)
+      .filter((lead) => matchesFilters(lead, payload.filters, attemptsByLead.get(lead.id) ?? 0, contactsByPatient.get(lead.patient_id ?? "") ?? []));
     if (!candidateLeads.length) return jsonError("No due, unassigned leads are available for the selected employee and scope. Future recall leads remain in the pipeline until their six-month review date.", 409);
 
     const candidateIds = candidateLeads.map((lead) => lead.id);
@@ -279,7 +398,7 @@ export async function POST(request: NextRequest) {
     if (assignmentError) throw new Error(assignmentError.message);
 
     const alreadyAssigned = new Set((existingAssignments ?? []).map((assignment: { lead_id: string }) => assignment.lead_id));
-    const assignableIds = candidateIds.filter((id) => !alreadyAssigned.has(id)).slice(0, requestedLimit);
+    const assignableIds = shuffle(candidateLeads.filter((lead) => !alreadyAssigned.has(lead.id))).slice(0, requestedLimit).map((lead) => lead.id);
     if (!assignableIds.length) {
       return jsonError("All matching leads are already actively allocated. Refresh the lead list to see the latest assignments.", 409);
     }
@@ -306,8 +425,12 @@ export async function POST(request: NextRequest) {
       action: "allocated_leads",
       after_data: {
         employee_id: payload.employee_id,
+        allocation_mode: "random",
+        filters: payload.filters ?? {},
         assigned_count: assignableIds.length,
         requested_count: candidateIds.length,
+        requested_limit: requestedLimit,
+        eligible_pool_count: candidateIds.length,
         skipped_already_assigned: candidateIds.length - assignableIds.length,
         lead_ids: assignableIds,
       },

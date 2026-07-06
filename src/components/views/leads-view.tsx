@@ -4,6 +4,59 @@ import { useMemo, useState } from "react";
 import { ArrowDownToLine, ChevronRight, Filter, Search, Shuffle, UserPlus } from "lucide-react";
 import type { AssignableUser, Lead, LeadStatus, Role } from "@/lib/types";
 
+type FilterOption = { value: string; label: string; count?: number };
+type AllocationFilters = {
+  medicalAids: string[];
+  options: string[];
+  lastVisitYears: string[];
+  lastVisitMonths: string[];
+  attemptBands: string[];
+  statuses: string[];
+  priorities: string[];
+  redFlags: string[];
+};
+
+const emptyAllocationFilters: AllocationFilters = {
+  medicalAids: [],
+  options: [],
+  lastVisitYears: [],
+  lastVisitMonths: [],
+  attemptBands: [],
+  statuses: [],
+  priorities: [],
+  redFlags: [],
+};
+
+const monthOptions: FilterOption[] = [
+  { value: "01", label: "January" },
+  { value: "02", label: "February" },
+  { value: "03", label: "March" },
+  { value: "04", label: "April" },
+  { value: "05", label: "May" },
+  { value: "06", label: "June" },
+  { value: "07", label: "July" },
+  { value: "08", label: "August" },
+  { value: "09", label: "September" },
+  { value: "10", label: "October" },
+  { value: "11", label: "November" },
+  { value: "12", label: "December" },
+];
+
+const attemptBandOptions: FilterOption[] = [
+  { value: "0", label: "0 attempts" },
+  { value: "1", label: "1 attempt" },
+  { value: "2", label: "2 attempts" },
+  { value: "3_plus", label: "3+ attempts" },
+];
+
+const redFlagOptions: FilterOption[] = [
+  { value: "manual_contact", label: "Patient telephone must be added manually" },
+  { value: "missing_mobile", label: "Missing mobile number" },
+  { value: "missing_alternative", label: "Missing alternative number" },
+  { value: "missing_medical_aid", label: "Missing medical aid" },
+  { value: "missing_option", label: "Missing option" },
+];
+
 function badgeClass(priority: string) {
   if (priority.includes("Premium")) return "premium";
   if (priority.includes("High")) return "high";
@@ -35,6 +88,105 @@ function addMonths(date: Date, months: number) {
   const next = new Date(date);
   next.setMonth(next.getMonth() + months);
   return next;
+}
+
+function isNotSupplied(value: string | null | undefined) {
+  return !value || value.trim().toLowerCase() === "not supplied";
+}
+
+function lastVisitParts(lead: Lead) {
+  if (!lead.lastVisit || lead.lastVisit === "Not supplied") return { year: "", month: "" };
+  const value = lead.lastVisit.slice(0, 10);
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return { year: "", month: "" };
+  return { year: date.getUTCFullYear().toString(), month: String(date.getUTCMonth() + 1).padStart(2, "0") };
+}
+
+function attemptBandFor(lead: Lead) {
+  if (lead.attempts >= 3) return "3_plus";
+  return String(Math.max(0, lead.attempts));
+}
+
+function redFlagsFor(lead: Lead) {
+  const flags: string[] = [];
+  if (lead.manualContactRequired) flags.push("manual_contact");
+  if (!lead.phone) flags.push("missing_mobile");
+  if (!lead.alternatePhone) flags.push("missing_alternative");
+  if (isNotSupplied(lead.medicalAid)) flags.push("missing_medical_aid");
+  if (isNotSupplied(lead.option)) flags.push("missing_option");
+  return flags;
+}
+
+function matchesSelected(selected: string[], value: string) {
+  return selected.length === 0 || selected.includes(value);
+}
+
+function matchesAllocationFilters(lead: Lead, filters: AllocationFilters) {
+  const visit = lastVisitParts(lead);
+  const flags = redFlagsFor(lead);
+  return matchesSelected(filters.medicalAids, lead.medicalAid)
+    && matchesSelected(filters.options, lead.option)
+    && matchesSelected(filters.lastVisitYears, visit.year)
+    && matchesSelected(filters.lastVisitMonths, visit.month)
+    && matchesSelected(filters.attemptBands, attemptBandFor(lead))
+    && matchesSelected(filters.statuses, lead.status)
+    && matchesSelected(filters.priorities, lead.priority)
+    && (filters.redFlags.length === 0 || filters.redFlags.some((flag) => flags.includes(flag)));
+}
+
+function filterPayload(filters: AllocationFilters) {
+  return {
+    medical_aids: filters.medicalAids,
+    options: filters.options,
+    last_visit_years: filters.lastVisitYears,
+    last_visit_months: filters.lastVisitMonths,
+    attempt_bands: filters.attemptBands,
+    statuses: filters.statuses,
+    priorities: filters.priorities,
+    red_flags: filters.redFlags,
+  };
+}
+
+function optionsFromLeads(leads: Lead[], read: (lead: Lead) => string, labels?: Record<string, string>) {
+  const counts = new Map<string, number>();
+  leads.forEach((lead) => {
+    const value = read(lead);
+    if (!value) return;
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  });
+  return Array.from(counts.entries())
+    .sort((a, b) => (labels?.[a[0]] ?? a[0]).localeCompare(labels?.[b[0]] ?? b[0]))
+    .map(([value, count]) => ({ value, label: labels?.[value] ?? value, count }));
+}
+
+function MultiCheckFilter({
+  title,
+  options,
+  selected,
+  onChange,
+}: {
+  title: string;
+  options: FilterOption[];
+  selected: string[];
+  onChange: (values: string[]) => void;
+}) {
+  function toggle(value: string) {
+    onChange(selected.includes(value) ? selected.filter((item) => item !== value) : [...selected, value]);
+  }
+
+  return <div className="form-field">
+    <label>{title}</label>
+    <div style={{ border: "1px solid #dfe9e6", borderRadius: 14, padding: 10, maxHeight: 158, overflow: "auto", background: "#fff" }}>
+      <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 10, fontWeight: 800, color: "#294541", marginBottom: 7 }}>
+        <input type="checkbox" checked={selected.length === 0} onChange={() => onChange([])} />
+        Select all
+      </label>
+      {options.length ? options.map((option) => <label key={option.value} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 10, color: "#566b67", marginTop: 7 }}>
+        <input type="checkbox" checked={selected.includes(option.value)} onChange={() => toggle(option.value)} />
+        <span>{option.label}{typeof option.count === "number" ? ` (${option.count})` : ""}</span>
+      </label>) : <div style={{ fontSize: 10, color: "#8c9a98" }}>No values available</div>}
+    </div>
+  </div>;
 }
 
 function isDueForFollowUp(lead: Lead) {
@@ -71,10 +223,11 @@ export function LeadsView({
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All priorities");
+  const [allocationFilters, setAllocationFilters] = useState<AllocationFilters>(emptyAllocationFilters);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState("");
   const [allocationLimit, setAllocationLimit] = useState(25);
   const [allocating, setAllocating] = useState(false);
-  const visible = useMemo(() => leads.filter((lead) => {
+  const baseVisible = useMemo(() => leads.filter((lead) => {
     const matchesQuery = `${lead.patient} ${lead.account} ${lead.phone}`.toLowerCase().includes(query.toLowerCase());
     const matchesMode = mode === "due"
       ? lead.nextAction === "Due today" || lead.nextAction === "Overdue" || lead.status === "Callback Due"
@@ -87,17 +240,40 @@ export function LeadsView({
             : role === "employee" && mode === "leads"
               ? !finalStatuses.includes(lead.status)
             : true;
-    const matchesFilter = filter === "All priorities" || lead.priority.includes(filter);
+    const matchesFilter = mode === "allocation" ? true : filter === "All priorities" || lead.priority.includes(filter);
     return matchesQuery && matchesMode && matchesFilter;
   }), [query, filter, leads, mode, role]);
 
   const isAllocationMode = mode === "allocation";
   const title = mode === "due" ? "Due today" : mode === "callbacks" ? "Patient callbacks" : mode === "completed" ? "Completed journeys" : isAllocationMode ? "Lead allocation" : mode === "review" ? "Manager review" : role === "employee" ? "My patient leads" : "Patient recall journeys";
   const sub = mode === "allocation" ? "Allocate only patient journeys that are due for follow-up. Future recall leads stay protected in the pipeline until their review date." : mode === "review" ? "Resolve journeys that need a manager's judgement or have reached three unsuccessful days." : "Find the next patient, understand their history, and keep their follow-up moving.";
-  const futurePipeline = visible.filter((lead) => lead.assignedTo === "Unallocated" && !finalStatuses.includes(lead.status) && !isDueForFollowUp(lead));
-  const allocationEligible = visible.filter((lead) => lead.assignedTo === "Unallocated" && lead.status === "New" && isDueForFollowUp(lead));
-  const displayedLeads = isAllocationMode && role !== "employee" ? allocationEligible : visible;
+  const unfilteredAllocationEligible = baseVisible.filter((lead) => lead.assignedTo === "Unallocated" && lead.status === "New" && isDueForFollowUp(lead));
+  const futurePipeline = baseVisible.filter((lead) => lead.assignedTo === "Unallocated" && !finalStatuses.includes(lead.status) && !isDueForFollowUp(lead) && matchesAllocationFilters(lead, allocationFilters));
+  const allocationEligible = unfilteredAllocationEligible.filter((lead) => matchesAllocationFilters(lead, allocationFilters));
+  const displayedLeads = isAllocationMode && role !== "employee" ? allocationEligible : baseVisible;
   const selectedEmployee = assignableUsers.find((user) => user.id === selectedEmployeeId);
+  const hasAllocationFilters = Object.values(allocationFilters).some((values) => values.length > 0);
+  const allocationFilterOptions = useMemo(() => {
+    const monthLabels = Object.fromEntries(monthOptions.map((option) => [option.value, option.label]));
+    const attemptLabels = Object.fromEntries(attemptBandOptions.map((option) => [option.value, option.label]));
+    const redFlagLabels = Object.fromEntries(redFlagOptions.map((option) => [option.value, option.label]));
+    const redFlagCounts = new Map<string, number>();
+    unfilteredAllocationEligible.forEach((lead) => redFlagsFor(lead).forEach((flag) => redFlagCounts.set(flag, (redFlagCounts.get(flag) ?? 0) + 1)));
+    return {
+      medicalAids: optionsFromLeads(unfilteredAllocationEligible, (lead) => lead.medicalAid),
+      options: optionsFromLeads(unfilteredAllocationEligible, (lead) => lead.option),
+      lastVisitYears: optionsFromLeads(unfilteredAllocationEligible, (lead) => lastVisitParts(lead).year),
+      lastVisitMonths: optionsFromLeads(unfilteredAllocationEligible, (lead) => lastVisitParts(lead).month, monthLabels),
+      attemptBands: optionsFromLeads(unfilteredAllocationEligible, attemptBandFor, attemptLabels),
+      statuses: optionsFromLeads(unfilteredAllocationEligible, (lead) => lead.status),
+      priorities: optionsFromLeads(unfilteredAllocationEligible, (lead) => lead.priority),
+      redFlags: redFlagOptions.map((option) => ({ ...option, count: redFlagCounts.get(option.value) ?? 0 })).filter((option) => option.count > 0 || allocationFilters.redFlags.includes(option.value)),
+    };
+  }, [unfilteredAllocationEligible, allocationFilters.redFlags]);
+
+  function updateAllocationFilter(key: keyof AllocationFilters, values: string[]) {
+    setAllocationFilters((current) => ({ ...current, [key]: values }));
+  }
 
   function exportVisibleLeads() {
     if (!displayedLeads.length) {
@@ -144,13 +320,13 @@ export function LeadsView({
       return;
     }
     const limit = Math.max(1, Math.min(Number(allocationLimit) || 1, allocationEligible.length));
-    const leadIds = allocationEligible.slice(0, limit).map((lead) => lead.id);
+    const leadIds = allocationEligible.map((lead) => lead.id);
     setAllocating(true);
     try {
       const response = await fetch("/api/allocations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ employee_id: selectedEmployeeId, lead_ids: leadIds, limit }),
+        body: JSON.stringify({ employee_id: selectedEmployeeId, lead_ids: leadIds, limit, allocation_mode: "random", filters: filterPayload(allocationFilters) }),
       });
       const result = await response.json();
       if (!response.ok) {
@@ -181,18 +357,18 @@ export function LeadsView({
       notify("No eligible patients are available yet because no live leads have been generated or allocated to you.");
       return;
     }
-    const eligible = visible.find(isEmployeeActionable);
+    const eligible = baseVisible.find(isEmployeeActionable);
     if (eligible) {
       onLead(eligible);
       notify(`${eligible.patient} opened as your next eligible patient journey`);
       return;
     }
     const reasons = [
-      visible.length === 0 ? "your current filter/search leaves no visible patients" : "",
-      visible.length > 0 && visible.every((lead) => finalStatuses.includes(lead.status)) ? "all visible patients are completed" : "",
-      visible.some((lead) => lead.status === "Booking Recorded Pending Verification") ? "some patients are awaiting manager booking verification" : "",
-      visible.some((lead) => lead.status === "Manager Review") ? "some patients require manager review" : "",
-      visible.some((lead) => !isEmployeeActionable(lead)) ? "some patients are allocated but not due for action yet" : "",
+      baseVisible.length === 0 ? "your current filter/search leaves no visible patients" : "",
+      baseVisible.length > 0 && baseVisible.every((lead) => finalStatuses.includes(lead.status)) ? "all visible patients are completed" : "",
+      baseVisible.some((lead) => lead.status === "Booking Recorded Pending Verification") ? "some patients are awaiting manager booking verification" : "",
+      baseVisible.some((lead) => lead.status === "Manager Review") ? "some patients require manager review" : "",
+      baseVisible.some((lead) => !isEmployeeActionable(lead)) ? "some patients are allocated but not due for action yet" : "",
     ].filter(Boolean).join("; ");
     notify(`No eligible patients available right now${reasons ? `: ${reasons}` : ". Check Due Today, Callbacks, or ask a manager for more allocated work."}`);
   }
@@ -205,19 +381,35 @@ export function LeadsView({
         <div className="form-grid">
           <div className="form-field"><label>Employee *</label><select className="form-control" value={selectedEmployeeId} onChange={(event) => setSelectedEmployeeId(event.target.value)}><option value="">Choose employee</option>{assignableUsers.map((user) => <option key={user.id} value={user.id}>{user.name} - {user.email}</option>)}</select></div>
           <div className="form-field"><label>Number of leads</label><input className="form-control" type="number" min={1} max={Math.max(1, allocationEligible.length)} value={allocationLimit} onChange={(event) => setAllocationLimit(Number(event.target.value))} /></div>
-          <div className="form-field full"><div className="callout" style={{ margin: 0 }}><Filter size={14}/><span>{allocationEligible.length.toLocaleString()} visible due, unallocated lead(s) are eligible for assignment right now. {futurePipeline.length.toLocaleString()} unallocated future lead(s) are protected until their six-month review date.{selectedEmployee ? ` Selected employee: ${selectedEmployee.name}.` : ""}</span></div></div>
+          <div className="form-field full"><div className="callout" style={{ margin: 0 }}><Filter size={14}/><span>{allocationEligible.length.toLocaleString()} filtered due, unallocated lead(s) are eligible for random assignment right now from {unfilteredAllocationEligible.length.toLocaleString()} due lead(s). {futurePipeline.length.toLocaleString()} matching future lead(s) are protected until their six-month review date.{selectedEmployee ? ` Selected employee: ${selectedEmployee.name}.` : ""}</span></div></div>
+        </div>
+        <div className="card" style={{ boxShadow: "none", border: "1px solid #e6efec", marginTop: 14 }}>
+          <div className="card-head"><div><div className="card-title">Advanced allocation filters</div><div className="card-sub">Select all is the default. Specific selections narrow the pool before the server randomly allocates leads.</div></div>{hasAllocationFilters && <button type="button" className="btn btn-secondary" onClick={() => setAllocationFilters(emptyAllocationFilters)}>Clear filters</button>}</div>
+          <div className="card-body">
+            <div className="form-grid">
+              <MultiCheckFilter title="Medical aid" options={allocationFilterOptions.medicalAids} selected={allocationFilters.medicalAids} onChange={(values) => updateAllocationFilter("medicalAids", values)} />
+              <MultiCheckFilter title="Option / plan" options={allocationFilterOptions.options} selected={allocationFilters.options} onChange={(values) => updateAllocationFilter("options", values)} />
+              <MultiCheckFilter title="Last visit year" options={allocationFilterOptions.lastVisitYears} selected={allocationFilters.lastVisitYears} onChange={(values) => updateAllocationFilter("lastVisitYears", values)} />
+              <MultiCheckFilter title="Last visit month" options={allocationFilterOptions.lastVisitMonths} selected={allocationFilters.lastVisitMonths} onChange={(values) => updateAllocationFilter("lastVisitMonths", values)} />
+              <MultiCheckFilter title="Number of attempts" options={allocationFilterOptions.attemptBands} selected={allocationFilters.attemptBands} onChange={(values) => updateAllocationFilter("attemptBands", values)} />
+              <MultiCheckFilter title="Engagement status" options={allocationFilterOptions.statuses} selected={allocationFilters.statuses} onChange={(values) => updateAllocationFilter("statuses", values)} />
+              <MultiCheckFilter title="Priority type" options={allocationFilterOptions.priorities} selected={allocationFilters.priorities} onChange={(values) => updateAllocationFilter("priorities", values)} />
+              <MultiCheckFilter title="Red flags" options={allocationFilterOptions.redFlags} selected={allocationFilters.redFlags} onChange={(values) => updateAllocationFilter("redFlags", values)} />
+            </div>
+            <div className="callout" style={{ background: "#f7fbfa", marginTop: 12, marginBottom: 0 }}><Shuffle size={14}/><span>Allocation mode: random. The selected employee receives a random selection from the filtered eligible pool, not the first available leads.</span></div>
+          </div>
         </div>
         {!assignableUsers.length && <div className="callout" style={{ background: "#fff8e6", color: "#80611c", marginTop: 12 }}><Filter size={14}/><span>No active Employee / Patient Care Coordinator accounts are available in your scope. Create or reactivate an employee before allocating work.</span></div>}
         <div className="modal-actions" style={{ borderRadius: 14, marginTop: 14 }}>
-          <button className="btn btn-primary" disabled={allocating || !selectedEmployeeId || allocationEligible.length === 0} onClick={allocateVisibleLeads}><UserPlus size={14}/>{allocating ? "Allocating..." : "Allocate visible leads"}</button>
+          <button className="btn btn-primary" disabled={allocating || !selectedEmployeeId || allocationEligible.length === 0} onClick={allocateVisibleLeads}><UserPlus size={14}/>{allocating ? "Allocating..." : "Randomly allocate filtered leads"}</button>
         </div>
       </div>
     </div>}
     <div className="toolbar">
       <div className="searchbar"><Search size={14} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search patient, account or phone..." /></div>
-      <select className="select" value={filter} onChange={(e) => setFilter(e.target.value)}><option>All priorities</option><option>Premium</option><option>High</option><option>Dormant</option><option>Missing</option></select>
+      {!isAllocationMode && <select className="select" value={filter} onChange={(e) => setFilter(e.target.value)}><option>All priorities</option><option>Premium</option><option>High</option><option>Dormant</option><option>Missing</option></select>}
     </div>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,fontSize:9,color:"#859593"}}><span><strong style={{color:"#263f3d"}}>{displayedLeads.length}</strong> {isAllocationMode && role !== "employee" ? "due, unallocated patient journeys shown" : "patient journeys shown"}</span>{isAllocationMode && <button className="btn btn-soft" disabled={allocating || role === "employee"} onClick={allocateVisibleLeads}><Shuffle size={13} />Auto-balance allocation</button>}</div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,fontSize:9,color:"#859593"}}><span><strong style={{color:"#263f3d"}}>{displayedLeads.length}</strong> {isAllocationMode && role !== "employee" ? "filtered due, unallocated patient journeys shown" : "patient journeys shown"}</span>{isAllocationMode && <button className="btn btn-soft" disabled={allocating || role === "employee"} onClick={allocateVisibleLeads}><Shuffle size={13} />Random allocation</button>}</div>
     {displayedLeads.length ? <div className="lead-grid">{displayedLeads.map((lead) => <article className="lead-card" key={lead.id} onClick={() => onLead(lead)}>
       <div className="lead-card-top"><span className={`badge ${badgeClass(lead.priority)}`}>{lead.priority}</span><span className="badge status-badge">{lead.status}</span></div>
       <div className="patient-cell"><div className="avatar">{lead.initials}</div><div><div className="patient-name">{lead.patient}</div><div className="patient-meta">{lead.account} · {lead.phone || "Missing contact number"}</div>{lead.manualContactRequired && <div style={{ marginTop: 6 }}><span className="badge missing">{lead.contactFlag ?? "Patient telephone must be added manually"}</span></div>}</div></div>
