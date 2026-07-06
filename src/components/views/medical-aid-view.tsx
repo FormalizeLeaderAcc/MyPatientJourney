@@ -28,6 +28,9 @@ type ScoringResult = {
     matched_option: string;
     quality_score: number;
     category: string;
+    match_confidence: string;
+    match_confidence_score: number;
+    match_reason: string;
     priority_label: string;
   }>;
 };
@@ -216,7 +219,7 @@ export function MedicalAidView({ notify }: { notify:(message:string)=>void }) {
             ].map((row, index)=><div className={`metric-card ${["teal","orange","rose","violet"][index]}`} key={row[0]}><div className="metric-label">{row[0]}</div><div className="metric-value">{row[1]}</div><div className="metric-trend">{row[2]}</div></div>)}
           </div>
           {scoringResult.samples.length > 0 && <div className="table-wrap" style={{ border: "1px solid #e5ecea", borderRadius: 12 }}>
-            <table className="data-table"><thead><tr><th>Patient</th><th>Uploaded medical aid</th><th>Matched option</th><th>Score</th><th>New priority</th></tr></thead><tbody>{scoringResult.samples.map((sample)=><tr key={sample.lead_id}><td><strong>{sample.patient}</strong><div style={{ fontSize: 8, color: "#82918f", marginTop: 3 }}>{sample.account_number}</div></td><td>{sample.patient_scheme} · {sample.patient_option}</td><td>{sample.matched_scheme} · {sample.matched_option}</td><td>{sample.quality_score} · {sample.category}</td><td><span className="badge high">{sample.priority_label}</span></td></tr>)}</tbody></table>
+            <table className="data-table"><thead><tr><th>Patient</th><th>Uploaded medical aid</th><th>Matched option</th><th>Confidence</th><th>Score</th><th>New priority</th></tr></thead><tbody>{scoringResult.samples.map((sample)=><tr key={sample.lead_id}><td><strong>{sample.patient}</strong><div style={{ fontSize: 8, color: "#82918f", marginTop: 3 }}>{sample.account_number}</div></td><td>{sample.patient_scheme} · {sample.patient_option}</td><td>{sample.matched_scheme} · {sample.matched_option}</td><td><span className="badge standard">{sample.match_confidence.replace(/_/g, " ")}</span><div style={{ fontSize: 8, color: "#82918f", marginTop: 3 }}>{sample.match_confidence_score}/100 · {sample.match_reason}</div></td><td>{sample.quality_score} · {sample.category}</td><td><span className="badge high">{sample.priority_label}</span></td></tr>)}</tbody></table>
           </div>}
         </div>}
       </div>

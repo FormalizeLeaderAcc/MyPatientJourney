@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
+import { buildMedicalAidScoringIndex, matchMedicalAidOption, type MedicalAidMatch, type MedicalAidScoringIndex } from "@/lib/medical-aid-matching";
 
 type Action = "preview" | "apply";
 type AppRole = "super_user" | "sub_super_user" | "manager" | "employee";
@@ -49,10 +50,6 @@ function jsonError(message: string, status = 400) {
 function firstRow<T>(value: T | T[] | null | undefined): T | null {
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
-}
-
-function normalize(value: unknown) {
-  return String(value ?? "").toLowerCase().trim().replace(/\s+/g, " ");
 }
 
 function priorityFromScore(category: string, score: number) {
@@ -131,28 +128,20 @@ async function loadLeads(admin: AdminClient, companyId?: string | null) {
 }
 
 function buildOptionIndex(options: AidOption[]) {
-  const index = new Map<string, AidOption>();
-  for (const option of options) {
-    const scheme = firstRow(option.medical_aid_schemes);
-    if (!scheme) continue;
-    const key = `${scheme.company_id ?? "global"}::${normalize(scheme.name)}::${normalize(option.option_name)}`;
-    const existing = index.get(key);
-    if (!existing || option.quality_score > existing.quality_score) index.set(key, option);
-  }
-  return index;
+  return buildMedicalAidScoringIndex(options);
 }
 
-function matchOption(index: Map<string, AidOption>, lead: LeadRow) {
+function matchOption(index: MedicalAidScoringIndex<AidOption>[], lead: LeadRow) {
   const patient = firstRow(lead.patients);
-  const schemeName = normalize(patient?.medical_aid_scheme);
-  const optionName = normalize(patient?.medical_aid_option);
-  if (!schemeName || !optionName) return null;
-  return index.get(`${lead.company_id}::${schemeName}::${optionName}`)
-    ?? index.get(`global::${schemeName}::${optionName}`)
-    ?? null;
+  return matchMedicalAidOption(index, {
+    companyId: lead.company_id,
+    schemeName: patient?.medical_aid_scheme,
+    optionName: patient?.medical_aid_option,
+  });
 }
 
-function scoringPayload(lead: LeadRow, option: AidOption) {
+function scoringPayload(lead: LeadRow, match: MedicalAidMatch<AidOption>) {
+  const option = match.option;
   const scheme = firstRow(option.medical_aid_schemes);
   const category = String(option.category ?? "unknown").toLowerCase();
   const score = Number(option.quality_score ?? 0);
@@ -163,7 +152,9 @@ function scoringPayload(lead: LeadRow, option: AidOption) {
       ...(lead.integration_refs ?? {}),
       medical_aid_scoring: {
         matched_at: new Date().toISOString(),
-        match_confidence: "exact",
+        match_confidence: match.confidence,
+        match_confidence_score: match.confidenceScore,
+        match_reason: match.reason,
         scheme_id: scheme?.id ?? null,
         scheme_name: scheme?.name ?? null,
         option_id: option.id,
@@ -196,8 +187,8 @@ export async function POST(request: NextRequest) {
     const index = buildOptionIndex(options);
 
     const matched = leads.flatMap((lead) => {
-      const option = matchOption(index, lead);
-      return option ? [{ lead, option, payload: scoringPayload(lead, option) }] : [];
+      const match = matchOption(index, lead);
+      return match ? [{ lead, option: match.option, match, payload: scoringPayload(lead, match) }] : [];
     });
     const unmatched = leads.length - matched.length;
     const premium = matched.filter((item) => {
@@ -257,6 +248,9 @@ export async function POST(request: NextRequest) {
           matched_option: item.option.option_name,
           quality_score: item.option.quality_score,
           category: item.option.category,
+          match_confidence: item.match.confidence,
+          match_confidence_score: item.match.confidenceScore,
+          match_reason: item.match.reason,
           priority_label: item.payload.priority_label,
         };
       }),

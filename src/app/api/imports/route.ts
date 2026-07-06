@@ -1,6 +1,7 @@
 import { after, NextRequest, NextResponse } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
+import { buildMedicalAidScoringIndex, matchMedicalAidOption, type MedicalAidMatch, type MedicalAidScoringIndex } from "@/lib/medical-aid-matching";
 
 export const maxDuration = 300;
 
@@ -167,10 +168,6 @@ function treatmentCodesContain(codes: string, code: "8101" | "8159") {
 function firstRow<T>(value: T | T[] | null | undefined): T | null {
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
-}
-
-function normalizeMatch(value: unknown) {
-  return String(value ?? "").toLowerCase().trim().replace(/\s+/g, " ");
 }
 
 function medicalAidPriority(category: string, score: number) {
@@ -514,33 +511,23 @@ async function loadMedicalAidScoring(admin: AdminClient, companyId: string) {
     const scheme = firstRow(option.medical_aid_schemes);
     return !scheme?.company_id || scheme.company_id === companyId;
   });
-  const scoringIndex = new Map<string, AidOption>();
-  for (const option of options) {
-    const scheme = firstRow(option.medical_aid_schemes);
-    if (!scheme) continue;
-    const key = `${scheme.company_id ?? "global"}::${normalizeMatch(scheme.name)}::${normalizeMatch(option.option_name)}`;
-    if (!scoringIndex.has(key)) scoringIndex.set(key, option);
-  }
-  return scoringIndex;
+  return buildMedicalAidScoringIndex(options);
 }
 
-function matchMedicalAidScore(scoringIndex: Map<string, AidOption>, row: PreparedLeadRow, companyId: string) {
-  const schemeName = normalizeMatch(row.medicalAidScheme);
-  const optionName = normalizeMatch(row.medicalAidOption);
-  if (!schemeName || !optionName) return null;
-  const option = scoringIndex.get(`${companyId}::${schemeName}::${optionName}`)
-    ?? scoringIndex.get(`global::${schemeName}::${optionName}`)
-    ?? null;
-  const scheme = firstRow(option?.medical_aid_schemes);
-  return option && scheme ? { option, scheme } : null;
+function matchMedicalAidScore(scoringIndex: MedicalAidScoringIndex<AidOption>[], row: PreparedLeadRow, companyId: string) {
+  return matchMedicalAidOption(scoringIndex, {
+    companyId,
+    schemeName: row.medicalAidScheme,
+    optionName: row.medicalAidOption,
+  });
 }
 
-function leadDataForRow(row: PreparedLeadRow, patientId: string, payload: ImportPayload, uploadedFileId: string, importBatchId: string, scoringIndex: Map<string, AidOption>, existingRefs?: Record<string, unknown> | null) {
+function leadDataForRow(row: PreparedLeadRow, patientId: string, payload: ImportPayload, uploadedFileId: string, importBatchId: string, scoringIndex: MedicalAidScoringIndex<AidOption>[], existingRefs?: Record<string, unknown> | null) {
   const dueForSixMonthRecall = isSixMonthRecallDue(row.lastTreatmentDate);
   const sixMonthReviewAt = sixMonthRecallDate(row.lastTreatmentDate);
   const sixMonthReviewDate = sixMonthReviewAt.slice(0, 10);
   const missingContact = !row.mobile && !row.alternative;
-  const scoringMatch = matchMedicalAidScore(scoringIndex, row, payload.company_id);
+  const scoringMatch: MedicalAidMatch<AidOption> | null = matchMedicalAidScore(scoringIndex, row, payload.company_id);
   const scoringCategory = scoringMatch ? String(scoringMatch.option.category ?? "unknown").toLowerCase() : null;
   const scoringScore = scoringMatch ? Number(scoringMatch.option.quality_score ?? 0) : null;
   const basePriorityScore = dueForSixMonthRecall ? 65 : 45;
@@ -567,7 +554,9 @@ function leadDataForRow(row: PreparedLeadRow, patientId: string, payload: Import
     ...(scoringMatch && scoringCategory && scoringScore !== null ? {
       medical_aid_scoring: {
         matched_at: new Date().toISOString(),
-        match_confidence: "exact",
+        match_confidence: scoringMatch.confidence,
+        match_confidence_score: scoringMatch.confidenceScore,
+        match_reason: scoringMatch.reason,
         scheme_id: scoringMatch.scheme.id,
         scheme_name: scoringMatch.scheme.name,
         option_id: scoringMatch.option.id,
