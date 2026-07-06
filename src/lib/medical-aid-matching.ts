@@ -33,19 +33,38 @@ export type MedicalAidScoringIndex<TOption extends MedicalAidOptionLike> = {
 };
 
 const schemeAliasGroups = [
-  ["bestmed", "bestmed medical scheme"],
+  ["1 life direct", "1life direct", "1 life", "1life"],
+  ["aeci", "aeci medical aid society", "aeci medical aid"],
+  ["anglo", "anglo medical scheme"],
   ["bankmed", "bankmed medical scheme"],
-  ["bonitas", "bonitas medical fund", "bonitas denis", "bonitas medical scheme"],
-  ["camaf", "chartered accountants sa medical aid fund", "chartered accountants medical aid fund", "chartered accountants (sa) medical aid fund"],
+  ["bestmed", "bestmed medical scheme"],
+  ["bmw", "bemas", "bmw employees medical aid society", "bmw medical aid"],
+  ["bonitas", "bonitas medical fund", "bonitas denis", "bonitas disc", "bonitas icon", "bonitas medical scheme"],
+  ["camaf", "chartered accountants sa medical aid fund", "chartered accountants sa medical aid fund camaf", "chartered accountants medical aid fund", "chartered accountants (sa) medical aid fund"],
   ["discovery", "discovery health", "discovery health medical scheme"],
   ["fedhealth", "fedhealth medical scheme"],
-  ["gems", "government employees medical scheme"],
+  ["gems", "government employees medical scheme", "government employees medical scheme gems", "government employees gems"],
+  ["genesis", "genesis medical scheme"],
+  ["glencore", "glencore medical scheme", "glencore medical"],
   ["keyhealth", "keyhealth medical scheme"],
+  ["la health", "la-health medical scheme", "la health medical scheme"],
+  ["makoti", "makoti medical scheme", "makoti denis"],
   ["medihelp", "medihelp medical scheme"],
+  ["medipos", "medipos medical scheme"],
   ["medshield", "medshield medical scheme"],
-  ["momentum", "momentum medical scheme"],
+  ["momentum", "momentum medical scheme", "momentum medical sch"],
+  ["netcare", "netcare medical scheme", "netcare medical sch"],
+  ["opmed", "opmed medical scheme"],
+  ["pick n pay", "pick n pay medical scheme", "pick n pay"],
+  ["platinum health", "platinum health medical scheme"],
+  ["polmed", "south african police service medical scheme", "south african police service medical scheme polmed", "polmed denis", "polmed ppn"],
   ["profmed", "profmed medical scheme"],
-  ["sizwe hosmed", "sizwe hosmed medical fund", "sizwe", "hosmed"],
+  ["remedi", "remedi medical aid scheme", "remedi medical scheme", "remedi ppn"],
+  ["sabmas", "sa breweries medical aid society", "sa breweries medical aid society sabmas", "sab medical scheme", "sabmas"],
+  ["sabc", "sabc medical scheme"],
+  ["sizwe hosmed", "sizwe hosmed medical fund", "sizwe hosmed medical scheme", "sizwe hosmed drc", "sizwe", "hosmed"],
+  ["thebemed", "thebemed medical scheme"],
+  ["umvuzo", "umvuzo health", "umvuzo medical scheme"],
 ];
 
 const aliasLookup = new Map<string, string>();
@@ -61,6 +80,9 @@ const genericSchemeWords = new Set([
   "fund",
   "health",
   "denis",
+  "disc",
+  "drc",
+  "icon",
 ]);
 
 const genericOptionWords = new Set([
@@ -77,7 +99,63 @@ const genericOptionWords = new Set([
   "option",
   "plan",
   "network",
+  "acute",
+  "acu",
+  "chr",
+  "denis",
+  "dentist",
+  "disc",
+  "drc",
+  "elect",
+  "icon",
+  "oncology",
+  "pha",
+  "prim",
+  "sec",
+  "specialia",
+  "specialist",
 ]);
+
+const numberWords: Record<string, string> = {
+  one: "1",
+  two: "2",
+  three: "3",
+  four: "4",
+  five: "5",
+  six: "6",
+  seven: "7",
+  eight: "8",
+  nine: "9",
+};
+
+const optionPhraseReplacements: Array<[RegExp, string]> = [
+  [/\bpace\s+one\b/g, "pace1"],
+  [/\bpace\s+two\b/g, "pace2"],
+  [/\bpace\s+three\b/g, "pace3"],
+  [/\bpace\s+four\b/g, "pace4"],
+  [/\bbeat\s+one\b/g, "beat1"],
+  [/\bbeat\s+two\b/g, "beat2"],
+  [/\bbeat\s+three\b/g, "beat3"],
+  [/\bbeat\s+four\b/g, "beat4"],
+  [/\btanzanite\s+one\b/g, "tanzanite1"],
+  [/\btanzanite\s+1\b/g, "tanzanite1"],
+  [/\bplatcomp\s+in\s+area\b/g, "comprehensive"],
+  [/\bplatcomprehensive\b/g, "comprehensive"],
+  [/\bplatcomp\s+out\s+area\b/g, "standard"],
+  [/\bpaltcomp\s+out\s+area\b/g, "standard"],
+  [/\bnetcare\s+savings\b/g, "core"],
+  [/\bnetcare\b/g, "plus"],
+  [/\bbasic\s+primary\b/g, "basic"],
+  [/\bcomp\b/g, "comprehensive"],
+  [/\bcomprehensive\s+option\b/g, "comprehensive"],
+  [/\bcomprehensive\s+plan\b/g, "comprehensive"],
+  [/\bstandard\s+option\b/g, "standard"],
+  [/\bnetwork\s+option\b/g, "network"],
+  [/\btraditional\s+plan\b/g, "traditional"],
+  [/\bsavings\s+plan\b/g, "savings"],
+  [/\bbasic\s+plan\b/g, "basic"],
+  [/\bvalue\s+platinum\s+core\b/g, "value platinum"],
+];
 
 function firstRow<T>(value: T | T[] | null | undefined): T | null {
   if (Array.isArray(value)) return value[0] ?? null;
@@ -97,6 +175,11 @@ function tokens(value: unknown) {
   return cleanText(value).split(" ").filter(Boolean);
 }
 
+function acronymKeys(value: unknown) {
+  const raw = String(value ?? "");
+  return Array.from(raw.matchAll(/\(([A-Z0-9]{2,})\)/g)).map((match) => cleanText(match[1])).filter(Boolean);
+}
+
 function stripGenericWords(value: unknown, genericWords: Set<string>) {
   return tokens(value).filter((token) => !genericWords.has(token)).join(" ");
 }
@@ -105,12 +188,26 @@ function canonicalScheme(value: unknown) {
   const cleaned = cleanText(value);
   if (!cleaned) return "";
   if (aliasLookup.has(cleaned)) return aliasLookup.get(cleaned) ?? cleaned;
+  for (const acronym of acronymKeys(value)) {
+    if (aliasLookup.has(acronym)) return aliasLookup.get(acronym) ?? acronym;
+  }
+  const aliasCandidates = Array.from(aliasLookup.keys()).sort((a, b) => b.length - a.length);
+  for (const alias of aliasCandidates) {
+    if (alias && containsWholeTokenPhrase(cleaned, alias)) return aliasLookup.get(alias) ?? alias;
+  }
   const stripped = stripGenericWords(cleaned, genericSchemeWords);
-  return aliasLookup.get(stripped) ?? stripped;
+  if (aliasLookup.has(stripped)) return aliasLookup.get(stripped) ?? stripped;
+  for (const alias of aliasCandidates) {
+    if (alias && containsWholeTokenPhrase(stripped, alias)) return aliasLookup.get(alias) ?? alias;
+  }
+  return stripped;
 }
 
 function optionKey(value: unknown) {
-  return stripGenericWords(value, genericOptionWords);
+  let cleaned = cleanText(value);
+  for (const [pattern, replacement] of optionPhraseReplacements) cleaned = cleaned.replace(pattern, replacement);
+  cleaned = cleaned.split(" ").map((token) => numberWords[token] ?? token).join(" ");
+  return stripGenericWords(cleaned, genericOptionWords);
 }
 
 function tokenSet(value: unknown, genericWords = genericOptionWords) {
@@ -142,6 +239,7 @@ export function buildMedicalAidScoringIndex<TOption extends MedicalAidOptionLike
     [scheme.name, scheme.normalized_name].forEach((value) => {
       const canonical = canonicalScheme(value);
       if (canonical) schemeKeys.add(canonical);
+      acronymKeys(value).forEach((key) => schemeKeys.add(key));
       const cleaned = cleanText(value);
       if (cleaned) schemeKeys.add(cleaned);
       const stripped = stripGenericWords(value, genericSchemeWords);
