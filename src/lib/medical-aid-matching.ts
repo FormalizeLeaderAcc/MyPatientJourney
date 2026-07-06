@@ -227,6 +227,7 @@ export function matchMedicalAidOption<TOption extends MedicalAidOptionLike>(
 
     if (!confidence || score < 70) continue;
     if (candidate.scope === input.companyId) score += 2;
+    score = Math.min(score, 100);
     if (!best || score > best.confidenceScore || (score === best.confidenceScore && candidate.option.quality_score > best.option.quality_score)) {
       best = { option: candidate.option, scheme: candidate.scheme, confidence, confidenceScore: score, reason };
     }
