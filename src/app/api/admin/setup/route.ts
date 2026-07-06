@@ -137,7 +137,7 @@ async function findOrCreateMedicalAidScheme(
     .from("medical_aid_schemes")
     .select("id")
     .eq("normalized_name", normalized)
-    .order("created_at", { ascending: true })
+    .order("id", { ascending: true })
     .limit(1);
 
   query = payload.company_id ? query.eq("company_id", payload.company_id) : query.is("company_id", null);
