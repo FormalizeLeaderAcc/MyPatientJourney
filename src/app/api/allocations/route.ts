@@ -256,6 +256,63 @@ async function safeAudit(admin: AdminClient, payload: Record<string, unknown>) {
   await admin.from("audit_logs").insert(payload);
 }
 
+async function fetchRowsInChunks<T>(
+  values: string[],
+  loader: (chunk: string[]) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+  chunkSize = 200,
+) {
+  const rows: T[] = [];
+  for (let index = 0; index < values.length; index += chunkSize) {
+    const chunk = values.slice(index, index + chunkSize);
+    const { data, error } = await loader(chunk);
+    if (error) throw new Error(error.message);
+    rows.push(...((data ?? []) as T[]));
+  }
+  return rows;
+}
+
+async function loadCandidateLeadRows(
+  admin: AdminClient,
+  payload: { lead_ids?: string[]; company_id?: string | null; branch_id?: string | null },
+  targetScope: { companyId: string; branchId: string | null },
+) {
+  const select = "id,company_id,branch_id,patient_id,status,next_action_at,last_visit_date,priority_label,integration_refs,priority_score,created_at,patients(full_name,account_number,medical_aid_scheme,medical_aid_option)";
+
+  if (payload.lead_ids?.length) {
+    const ids = Array.from(new Set(payload.lead_ids));
+    return fetchRowsInChunks<LeadRow>(ids, (chunk) => admin
+      .from("leads")
+      .select(select)
+      .in("id", chunk));
+  }
+
+  if (payload.company_id && payload.company_id !== targetScope.companyId) return [];
+  if (payload.branch_id && targetScope.branchId && payload.branch_id !== targetScope.branchId) return [];
+
+  const pageSize = 1000;
+  const maxRows = 10000;
+  const rows: LeadRow[] = [];
+  for (let offset = 0; offset < maxRows; offset += pageSize) {
+    let query = admin
+      .from("leads")
+      .select(select)
+      .eq("status", "new")
+      .eq("company_id", targetScope.companyId)
+      .order("priority_score", { ascending: false })
+      .order("created_at", { ascending: true })
+      .range(offset, offset + pageSize - 1);
+
+    if (payload.branch_id) query = query.eq("branch_id", payload.branch_id);
+
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    const page = (data ?? []) as LeadRow[];
+    rows.push(...page);
+    if (page.length < pageSize) break;
+  }
+  return rows;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { admin, roles, isSuper } = await getContext(request);
@@ -340,45 +397,24 @@ export async function POST(request: NextRequest) {
     }
 
     const requestedLimit = Math.max(1, Math.min(Number(payload.limit ?? 25), 250));
-    let leadQuery = admin
-      .from("leads")
-      .select("id,company_id,branch_id,patient_id,status,next_action_at,last_visit_date,priority_label,integration_refs,priority_score,created_at,patients(full_name,account_number,medical_aid_scheme,medical_aid_option)")
-      .order("priority_score", { ascending: false })
-      .order("created_at", { ascending: true })
-      .limit(payload.lead_ids?.length ? payload.lead_ids.length : requestedLimit * 3);
-
-    if (payload.lead_ids?.length) {
-      leadQuery = leadQuery.in("id", payload.lead_ids);
-    } else {
-      leadQuery = leadQuery.eq("status", "new");
-      if (payload.company_id) leadQuery = leadQuery.eq("company_id", payload.company_id);
-      if (payload.branch_id) leadQuery = leadQuery.eq("branch_id", payload.branch_id);
-      leadQuery = leadQuery.eq("company_id", targetScope.companyId);
-    }
-
-    const { data: leads, error: leadError } = await leadQuery;
-    if (leadError) throw new Error(leadError.message);
-
-    const rawLeads = ((leads ?? []) as LeadRow[]);
+    const rawLeads = await loadCandidateLeadRows(admin, payload, { companyId: targetScope.companyId, branchId: targetScope.branchId ?? null });
     const candidateLeadIds = rawLeads.map((lead) => lead.id);
     const patientIds = Array.from(new Set(rawLeads.map((lead) => lead.patient_id).filter(Boolean))) as string[];
-    const [attemptResult, contactResult] = await Promise.all([
+    const [attemptRows, contactRows] = await Promise.all([
       candidateLeadIds.length
-        ? admin.from("lead_attempts").select("lead_id").in("lead_id", candidateLeadIds)
-        : Promise.resolve({ data: [], error: null }),
+        ? fetchRowsInChunks<{ lead_id: string }>(candidateLeadIds, (chunk) => admin.from("lead_attempts").select("lead_id").in("lead_id", chunk))
+        : Promise.resolve([]),
       patientIds.length
-        ? admin.from("patient_contacts").select("patient_id,contact_type,value,is_primary").in("patient_id", patientIds)
-        : Promise.resolve({ data: [], error: null }),
+        ? fetchRowsInChunks<ContactRow>(patientIds, (chunk) => admin.from("patient_contacts").select("patient_id,contact_type,value,is_primary").in("patient_id", chunk))
+        : Promise.resolve([]),
     ]);
-    if (attemptResult.error) throw new Error(attemptResult.error.message);
-    if (contactResult.error) throw new Error(contactResult.error.message);
 
     const attemptsByLead = new Map<string, number>();
-    ((attemptResult.data ?? []) as { lead_id: string }[]).forEach((attempt) => {
+    attemptRows.forEach((attempt) => {
       attemptsByLead.set(attempt.lead_id, (attemptsByLead.get(attempt.lead_id) ?? 0) + 1);
     });
     const contactsByPatient = new Map<string, ContactRow[]>();
-    ((contactResult.data ?? []) as ContactRow[]).forEach((contact) => {
+    contactRows.forEach((contact) => {
       contactsByPatient.set(contact.patient_id, [...(contactsByPatient.get(contact.patient_id) ?? []), contact]);
     });
 
@@ -390,14 +426,13 @@ export async function POST(request: NextRequest) {
     if (!candidateLeads.length) return jsonError("No due, unassigned leads are available for the selected employee and scope. Future recall leads remain in the pipeline until their six-month review date.", 409);
 
     const candidateIds = candidateLeads.map((lead) => lead.id);
-    const { data: existingAssignments, error: assignmentError } = await admin
+    const existingAssignments = await fetchRowsInChunks<{ lead_id: string }>(candidateIds, (chunk) => admin
       .from("lead_assignments")
       .select("lead_id")
-      .in("lead_id", candidateIds)
-      .is("ended_at", null);
-    if (assignmentError) throw new Error(assignmentError.message);
+      .in("lead_id", chunk)
+      .is("ended_at", null));
 
-    const alreadyAssigned = new Set((existingAssignments ?? []).map((assignment: { lead_id: string }) => assignment.lead_id));
+    const alreadyAssigned = new Set(existingAssignments.map((assignment) => assignment.lead_id));
     const assignableIds = shuffle(candidateLeads.filter((lead) => !alreadyAssigned.has(lead.id))).slice(0, requestedLimit).map((lead) => lead.id);
     if (!assignableIds.length) {
       return jsonError("All matching leads are already actively allocated. Refresh the lead list to see the latest assignments.", 409);

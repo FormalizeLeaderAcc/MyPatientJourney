@@ -337,13 +337,12 @@ export function LeadsView({
       return;
     }
     const limit = Math.max(1, Math.min(Number(allocationLimit) || 1, allocationEligible.length));
-    const leadIds = allocationEligible.map((lead) => lead.id);
     setAllocating(true);
     try {
       const response = await fetch("/api/allocations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ employee_id: selectedEmployeeId, lead_ids: leadIds, limit, allocation_mode: "random", filters: filterPayload(allocationFilters) }),
+        body: JSON.stringify({ employee_id: selectedEmployeeId, limit, allocation_mode: "random", filters: filterPayload(allocationFilters) }),
       });
       const result = await response.json();
       if (!response.ok) {
