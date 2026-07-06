@@ -24,6 +24,7 @@ type SetupPayload =
   | { action: "change_user_email"; user_id: string; email: string }
   | { action: "import_medical_aids"; company_id?: string | null; original_name: string; rows: MedicalAidImportRow[] }
   | { action: "save_medical_aid_option"; company_id?: string | null; option_id?: string | null; scheme_name: string; option_name: string; quality_score: number; category: "unknown" | "low" | "medium" | "high" | "premium"; notes?: string | null }
+  | { action: "clear_medical_aid_scoring"; reason: string; password: string }
   | { action: "recall_uploaded_list"; uploaded_file_id: string; reason: string; password: string };
 
 type MedicalAidImportRow = {
@@ -459,6 +460,44 @@ async function saveMedicalAidOption(admin: AdminClient, actorId: string, payload
   return { message: "Medical aid scoring option saved" };
 }
 
+async function clearMedicalAidScoring(admin: AdminClient, actorId: string, payload: Extract<SetupPayload, { action: "clear_medical_aid_scoring" }>) {
+  if (!payload.reason?.trim() || payload.reason.trim().length < 8) throw new Error("Please provide a clear reason for clearing Medical Aid Intelligence.");
+
+  const { count: schemeCount, error: schemeCountError } = await admin
+    .from("medical_aid_schemes")
+    .select("id", { count: "exact", head: true });
+  if (schemeCountError) throw new Error(schemeCountError.message);
+
+  const { count: optionCount, error: optionCountError } = await admin
+    .from("medical_aid_options")
+    .select("id", { count: "exact", head: true });
+  if (optionCountError) throw new Error(optionCountError.message);
+
+  const { error: optionDeleteError } = await admin
+    .from("medical_aid_options")
+    .delete()
+    .not("id", "is", null);
+  if (optionDeleteError) throw new Error(optionDeleteError.message);
+
+  const { error: schemeDeleteError } = await admin
+    .from("medical_aid_schemes")
+    .delete()
+    .not("id", "is", null);
+  if (schemeDeleteError) throw new Error(schemeDeleteError.message);
+
+  await safeAudit(admin, actorId, "cleared_medical_aid_scoring", "medical_aid_scoring", null, null, {
+    scheme_count: schemeCount ?? 0,
+    option_count: optionCount ?? 0,
+  }, {
+    scheme_count: 0,
+    option_count: 0,
+    reason: payload.reason.trim(),
+    protected_by_password_confirmation: true,
+  });
+
+  return { message: `Medical Aid Intelligence cleared: ${optionCount ?? 0} option row(s) and ${schemeCount ?? 0} scheme row(s) removed.` };
+}
+
 export async function POST(request: NextRequest) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -760,6 +799,13 @@ export async function POST(request: NextRequest) {
 
     if (payload.action === "save_medical_aid_option") {
       const result = await saveMedicalAidOption(admin, authData.user.id, payload);
+      return NextResponse.json(result);
+    }
+
+    if (payload.action === "clear_medical_aid_scoring") {
+      if (!requesterIsPrimarySuper) return jsonError("Only the primary Super User can clear Medical Aid Intelligence.", 403);
+      await verifyPrimarySuperPassword(supabaseUrl, anonKey, requester.profile?.email ?? authData.user.email, payload.password);
+      const result = await clearMedicalAidScoring(admin, authData.user.id, payload);
       return NextResponse.json(result);
     }
 

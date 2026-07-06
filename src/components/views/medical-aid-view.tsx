@@ -54,6 +54,10 @@ export function MedicalAidView({ notify }: { notify:(message:string)=>void }) {
   const [saving, setSaving] = useState(false);
   const [manualSaving, setManualSaving] = useState(false);
   const [manualOption, setManualOption] = useState<ManualOptionForm>(emptyManualOption);
+  const [clearModalOpen, setClearModalOpen] = useState(false);
+  const [clearReason, setClearReason] = useState("");
+  const [clearPassword, setClearPassword] = useState("");
+  const [clearing, setClearing] = useState(false);
   const [scoring, setScoring] = useState(false);
   const [scoringResult, setScoringResult] = useState<ScoringResult | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -217,6 +221,44 @@ export function MedicalAidView({ notify }: { notify:(message:string)=>void }) {
     await loadData();
   }
 
+  async function clearMedicalAidScoring() {
+    if (clearReason.trim().length < 8) {
+      setError("Please provide a clear reason for clearing Medical Aid Intelligence.");
+      return;
+    }
+    if (!clearPassword.trim()) {
+      setError("Enter your Super User password to confirm this protected action.");
+      return;
+    }
+
+    setClearing(true);
+    setError("");
+    const response = await fetch("/api/admin/setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "clear_medical_aid_scoring",
+        reason: clearReason,
+        password: clearPassword,
+      }),
+    });
+    const result = await response.json();
+    setClearing(false);
+    if (!response.ok) {
+      setError(result.error ?? "Unable to clear Medical Aid Intelligence.");
+      return;
+    }
+    notify(result.message ?? "Medical Aid Intelligence cleared");
+    setClearModalOpen(false);
+    setClearReason("");
+    setClearPassword("");
+    setRows([]);
+    setFileName("");
+    setScoringResult(null);
+    resetManualOption();
+    await loadData();
+  }
+
   async function scoreLeads(action: "preview" | "apply") {
     if (action === "apply" && !scoringResult) {
       setError("Preview scoring impact before applying updates.");
@@ -255,7 +297,24 @@ export function MedicalAidView({ notify }: { notify:(message:string)=>void }) {
     {error && <div className="callout" style={{ background: "#fbe9ea", color: "#a84850" }}><ShieldCheck size={14}/><span>{error}</span></div>}
     <input ref={inputRef} hidden type="file" accept=".xlsx,.xls,.csv" onChange={(event) => event.target.files?.[0] && readFile(event.target.files[0])}/>
 
+    <div className="callout" style={{ background: "#fffaf1", color: "#7b5b20", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+      <span><strong>Protected scoring reset:</strong> Clear all Medical Aid Intelligence rows only when you need to remove an incorrect or duplicated scoring table.</span>
+      <button className="btn btn-danger-soft" onClick={() => setClearModalOpen(true)}>Clear scoring list</button>
+    </div>
+
     <div className="metric-grid" style={{gridTemplateColumns:"repeat(4,1fr)"}}>{[["Configured options",String(visibleOptions.length),"Scoring rows available"],["Premium/high options",String(premiumCount),"Prioritises better recall opportunities"],["Pending import rows",String(rows.length),"Validated before saving"],["Average quality score",averageScore === null ? "—" : String(averageScore),"Across visible options"]].map((row,i)=><div className={`metric-card ${["teal","orange","rose","violet"][i]}`} key={row[0]}><div className="metric-label">{row[0]}</div><div className="metric-value">{row[1]}</div><div className="metric-trend">{row[2]}</div></div>)}</div>
+
+    {clearModalOpen && <div className="modal-backdrop" onClick={() => { setClearModalOpen(false); setClearPassword(""); }}>
+      <div className="modal" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-head"><strong>Clear Medical Aid Intelligence</strong><button className="icon-btn" onClick={() => { setClearModalOpen(false); setClearPassword(""); }}>x</button></div>
+        <div className="modal-body">
+          <div className="callout" style={{ background: "#fff4ed", alignItems: "flex-start" }}><ShieldCheck size={14}/><span>This is destructive and primary-Super-User-only. It removes all medical aid schemes and option scoring rows across all scopes. It does not remove leads, patients, companies, branches, uploaded lists, or audit history.</span></div>
+          <div className="form-field"><label>Reason for clearing *</label><textarea className="form-control" value={clearReason} onChange={(event) => setClearReason(event.target.value)} placeholder="Example: Duplicate scoring table imported during testing"/></div>
+          <div className="form-field" style={{ marginTop: 12 }}><label>Confirm with your Super User password *</label><input className="form-control" type="password" value={clearPassword} onChange={(event) => setClearPassword(event.target.value)} placeholder="Enter your login password" autoComplete="current-password"/></div>
+        </div>
+        <div className="modal-actions"><button className="btn btn-secondary" onClick={() => { setClearModalOpen(false); setClearPassword(""); }}>Cancel</button><button className="btn btn-danger-soft" disabled={clearing || clearReason.trim().length < 8 || !clearPassword.trim()} onClick={() => void clearMedicalAidScoring()}>{clearing ? "Clearing..." : "Confirm clear"}</button></div>
+      </div>
+    </div>}
 
     <div className="card" style={{ marginBottom: 18 }}>
       <div className="card-head"><div><div className="card-title">Import medical aid scoring</div><div className="card-sub">Required fields: scheme_name, option_name, quality_score, category, notes.</div></div></div>
